@@ -7,16 +7,14 @@ Set BROKER_STUB_MODE=true in .env to skip real broker connection.
 import logging
 import os
 from typing import Optional
-from dotenv import load_dotenv
-
-load_dotenv()
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-STUB_MODE = os.getenv("BROKER_STUB_MODE", "false").lower() == "true"
-MT5_LOGIN    = int(os.getenv("MT5_LOGIN", "0") or 0)
-MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
-MT5_SERVER   = os.getenv("MT5_SERVER", "")
+STUB_MODE = settings.broker_stub_mode
+MT5_LOGIN    = settings.mt5_login
+MT5_PASSWORD = settings.mt5_password
+MT5_SERVER   = settings.mt5_server
 
 SYMBOL = "XAUUSD"
 
@@ -152,7 +150,7 @@ def get_open_positions() -> list:
 def get_account_balance() -> float:
     """Return current demo account balance."""
     if STUB_MODE:
-        return float(os.getenv("ACCOUNT_BALANCE_EQUIV", 500))
+        return settings.account_balance_equiv
     try:
         import MetaTrader5 as mt5
         if not _init_mt5():

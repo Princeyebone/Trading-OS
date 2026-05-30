@@ -16,10 +16,8 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from sqlmodel import Session, select
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # Ensure the backend/ dir is on sys.path when running directly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -203,7 +201,7 @@ def run_engine_cycle():
 
         # ── Data layer ──
         try:
-            timeframes = data_fetcher.fetch_all_timeframes()
+            timeframes, is_stale = data_fetcher.fetch_all_timeframes()
             logger.info("OHLCV data fetched OK")
         except RuntimeError as e:
             logger.warning(f"Data fetch skip: {e}")
@@ -225,6 +223,14 @@ def run_engine_cycle():
         # ── Pattern detection ──
         patterns_data = pattern_detector.detect_all_patterns(timeframes)
         logger.info(f"Patterns detected: {len(patterns_data['patterns'])} | Liquidity: {len(patterns_data['liquidity'])}")
+
+        # ── Stale Data Check ──
+        if is_stale:
+            logger.info("Data is stale (market closed/lagging) — logging context and SKIPPING analysis")
+            log_signal(session, current_session, "WAIT", None, None,
+                       "STALE_DATA", snap.get("m15_close"),
+                       1, snap, patterns_data)
+            return
 
         # ── Account state ──
         open_count = len(session.exec(select(Trade).where(Trade.status == "OPEN")).all())
@@ -351,6 +357,18 @@ def run_engine_cycle():
 
 
 # ─── Entry point ────────────────────────────────────────────────────────────────
+def start_background_scheduler():
+    global DRY_RUN
+    DRY_RUN = False  # Production backend implies live execution, unless toggled elsewhere
+    
+    scheduler = BackgroundScheduler(timezone="America/New_York")
+    scheduler.add_job(run_engine_cycle, "interval", minutes=15, id="engine_cycle")
+    scheduler.add_job(check_and_close_trades, "interval", minutes=5, id="outcome_monitor")
+    
+    logger.info("🚀 Background Engine scheduler started inside FastAPI")
+    scheduler.start()
+    return scheduler
+
 def main():
     global DRY_RUN
 

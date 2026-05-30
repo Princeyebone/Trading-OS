@@ -13,9 +13,6 @@ import os
 import sys
 
 from apscheduler.schedulers.blocking import BlockingScheduler
-from dotenv import load_dotenv
-
-load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logger = logging.getLogger("optimizer.weekly_scheduler")

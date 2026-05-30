@@ -2,13 +2,10 @@
 engine/db.py — Engine-side database session helpers.
 Uses synchronous SQLModel session (engine runs in a single process).
 """
-import os
 from sqlmodel import SQLModel, create_engine, Session
-from dotenv import load_dotenv
+from app.settings import settings
 
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://trading_user:password@localhost:5432/trading_os")
+DATABASE_URL = settings.database_url
 
 engine = create_engine(
     DATABASE_URL,

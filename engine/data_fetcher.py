@@ -10,6 +10,8 @@ from typing import Optional
 import yfinance as yf
 import pandas as pd
 
+from app.settings import settings
+
 logger = logging.getLogger(__name__)
 
 SYMBOL = "GC=F"          # yfinance ticker for Gold Futures (XAU/USD proxy)
@@ -102,6 +104,8 @@ def check_staleness(df: pd.DataFrame) -> bool:
     """
     if df is None or df.empty:
         return True
+    if settings.ignore_staleness:
+        return False
     latest_candle_time = df.index[-1].to_pydatetime()
     if latest_candle_time.tzinfo is None:
         latest_candle_time = latest_candle_time.replace(tzinfo=timezone.utc)
@@ -117,17 +121,18 @@ def get_current_price() -> Optional[float]:
     return float(df["close"].iloc[-1])
 
 
-def fetch_all_timeframes() -> dict:
+def fetch_all_timeframes() -> tuple[dict, bool]:
     """
     Fetch M15, H1, H4 in one call.
-    Returns {"M15": df, "H1": df, "H4": df} or raises if any is stale.
+    Returns ({"M15": df, "H1": df, "H4": df}, is_stale) or raises RuntimeError if fetch fails entirely.
     """
     result = {}
+    is_stale = False
     for tf in ["M15", "H1", "H4"]:
         df = fetch_ohlcv(tf)
         if df is None:
             raise RuntimeError(f"Failed to fetch {tf} data")
         if check_staleness(df):
-            raise RuntimeError(f"{tf} data is stale — latest candle too old")
+            is_stale = True
         result[tf] = df
-    return result
+    return result, is_stale

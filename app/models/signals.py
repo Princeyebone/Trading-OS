@@ -21,7 +21,6 @@ class Signal(SQLModel, table=True):
     confidence: Optional[int] = Field(default=None)  # 0–100
     skip_reason: Optional[str] = Field(default=None, max_length=200)
     prompt_version: int = Field(default=1)
-    claude_response_id: Optional[int] = Field(default=None, foreign_key="claude_responses.id")
     price_at_signal: Optional[float] = Field(default=None)
 
 

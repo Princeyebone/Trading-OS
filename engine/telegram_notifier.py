@@ -6,15 +6,13 @@ Set TELEGRAM_STUB_MODE=true to skip sending (useful for testing).
 import logging
 import os
 import asyncio
-from dotenv import load_dotenv
-
-load_dotenv()
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
-STUB_MODE = os.getenv("TELEGRAM_STUB_MODE", "false").lower() == "true"
+BOT_TOKEN = settings.telegram_bot_token
+CHAT_ID   = settings.telegram_chat_id
+STUB_MODE = settings.telegram_stub_mode
 
 
 def _send(message: str):

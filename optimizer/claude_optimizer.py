@@ -5,16 +5,17 @@ Generates 3 ranked improvement suggestions from the weekly stats.
 """
 import json
 import logging
-import os
 import time
 from datetime import date
 from typing import Optional
 
 import anthropic
 
+from app.settings import settings
+
 logger = logging.getLogger(__name__)
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY = settings.anthropic_api_key
 OPTIMIZER_MODEL   = "claude-sonnet-4-5"  # Use a stronger model for optimizer
 
 OPTIMIZER_SYSTEM = """You are an expert trading system analyst reviewing weekly performance data for an XAU/USD (Gold) AI trading system.

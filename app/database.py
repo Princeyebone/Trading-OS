@@ -3,13 +3,10 @@ Database configuration for Trading OS v2.
 Uses SQLModel (SQLAlchemy + Pydantic unified).
 Connects to PostgreSQL via DATABASE_URL from .env
 """
-import os
 from sqlmodel import SQLModel, create_engine, Session
-from dotenv import load_dotenv
+from app.settings import settings
 
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://trading_user:password@localhost:5432/trading_os")
+DATABASE_URL = settings.database_url
 
 # SQLModel engine (sync — used by FastAPI + Engine)
 engine = create_engine(
@@ -27,9 +24,6 @@ def get_session():
         yield session
 
 
-def create_db_and_tables():
-    """Called on FastAPI startup to create all SQLModel tables."""
-    SQLModel.metadata.create_all(engine)
 
 
 def check_db_connection() -> bool:

@@ -16,10 +16,11 @@ from sqlmodel import Session, select
 from engine.db import get_session
 from app.models.signals import ClaudeResponse
 from app.models.optimizer import PromptVersion
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY = settings.anthropic_api_key
 DEFAULT_MODEL = "claude-haiku-4-5"
 
 _client: Optional[anthropic.Anthropic] = None

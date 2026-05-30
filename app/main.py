@@ -1,16 +1,15 @@
 """
 Trading OS v2 — FastAPI Application Entry Point
 """
-import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
+from sqlmodel import Session
+from app.settings import settings
 
-load_dotenv()
-
-from app.database import create_db_and_tables
-from app.routers import trades, signals, performance, optimizer, prompts, config
+from alembic.config import Config
+from alembic import command
+from app.routers import trades, signals, performance, optimizer, prompts, config, system
 from app.models import (  # noqa: F401 — import all models so SQLModel registers them
     Signal, MarketContext, PatternEvent, ClaudeResponse,
     Trade, TradeOutcome, TradeJournal,
@@ -19,13 +18,24 @@ from app.models import (  # noqa: F401 — import all models so SQLModel registe
 )
 
 
+from engine.scheduler import start_background_scheduler
+
+_scheduler = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create DB tables on startup (idempotent — safe to run every time)."""
-    create_db_and_tables()
+    """Run database migrations on startup using Alembic."""
+    global _scheduler
+    alembic_cfg = Config("alembic.ini")
+    command.upgrade(alembic_cfg, "head")
     # Seed default engine config if none exists
     _seed_defaults()
+    
+    _scheduler = start_background_scheduler()
     yield
+    
+    if _scheduler:
+        _scheduler.shutdown()
 
 
 def _seed_defaults():
@@ -94,10 +104,10 @@ app = FastAPI(
 )
 
 # CORS — allow React dev server
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_URL = settings.frontend_url
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000"],
+    allow_origins=[FRONTEND_URL, "http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -110,7 +120,7 @@ app.include_router(performance.router)
 app.include_router(optimizer.router)
 app.include_router(prompts.router)
 app.include_router(config.router)
-
+app.include_router(system.router)
 
 @app.get("/")
 def root():
