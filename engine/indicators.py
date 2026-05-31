@@ -123,25 +123,72 @@ def compute_all_indicators(timeframes: dict) -> dict:
 def extract_indicator_snapshot(timeframes: dict) -> dict:
     """
     Extract the latest indicator values from each timeframe into a flat dict
-    for prompt building and DB storage.
+    for prompt building and DB storage. Includes human-readable interpretations
+    (directions, signals) to optimise LLM token usage and reasoning quality.
     """
     snap = {}
     for tf, df in timeframes.items():
+        if len(df) < 4:
+            continue
+            
         row = df.iloc[-1]
         prefix = tf.lower()
+        
+        # Raw prices & core averages
         snap[f"{prefix}_close"]     = round(float(row["close"]), 2)
         snap[f"{prefix}_ema_20"]    = round(float(row.get("ema_20", 0)), 2)
         snap[f"{prefix}_ema_50"]    = round(float(row.get("ema_50", 0)), 2)
         snap[f"{prefix}_ema_200"]   = round(float(row.get("ema_200", 0)), 2)
-        snap[f"{prefix}_rsi"]       = round(float(row.get("rsi", 50)), 1)
-        snap[f"{prefix}_atr"]       = round(float(row.get("atr", 0)), 2)
-        snap[f"{prefix}_macd_hist"] = round(float(row.get("macd_hist", 0)), 4)
-        snap[f"{prefix}_stoch_k"]   = round(float(row.get("stoch_k", 50)), 1)
-        snap[f"{prefix}_vol_ratio"] = round(float(row.get("vol_ratio", 1)), 2)
         snap[f"{prefix}_alignment"] = get_ema_alignment(df)
+        
+        # EMA Slope (Momentum of the structure over last 4 candles)
+        try:
+            slope = row["ema_20"] - df.iloc[-4]["ema_20"]
+            snap[f"{prefix}_ema20_slope"] = round(float(slope), 2)
+        except Exception:
+            snap[f"{prefix}_ema20_slope"] = 0.0
 
-    # ATR percentile from H4
+        # RSI + Direction
+        rsi_val = float(row.get("rsi", 50))
+        snap[f"{prefix}_rsi"] = round(rsi_val, 1)
+        try:
+            rsi_prev = float(df.iloc[-3]["rsi"])
+            snap[f"{prefix}_rsi_direction"] = "RISING" if rsi_val > rsi_prev else "FALLING"
+        except Exception:
+            snap[f"{prefix}_rsi_direction"] = "UNKNOWN"
+
+        # Stochastic + Crossover Signal
+        stoch_k = float(row.get("stoch_k", 50))
+        stoch_d = float(row.get("stoch_d", 50))
+        snap[f"{prefix}_stoch_k"] = round(stoch_k, 1)
+        snap[f"{prefix}_stoch_d"] = round(stoch_d, 1)
+        snap[f"{prefix}_stoch_signal"] = "BULLISH_CROSS" if stoch_k > stoch_d else "BEARISH_CROSS"
+
+        # MACD + Momentum Interpretation
+        macd_hist = float(row.get("macd_hist", 0))
+        snap[f"{prefix}_macd_hist"] = round(macd_hist, 4)
+        try:
+            macd_prev = float(df.iloc[-2]["macd_hist"])
+            snap[f"{prefix}_macd_momentum"] = "INCREASING" if macd_hist > macd_prev else "DECREASING"
+        except Exception:
+            snap[f"{prefix}_macd_momentum"] = "UNKNOWN"
+
+        # Volume + Signal
+        vol_ratio = float(row.get("vol_ratio", 1))
+        snap[f"{prefix}_vol_ratio"] = round(vol_ratio, 2)
+        if vol_ratio > 1.5:
+            snap[f"{prefix}_volume_signal"] = "HIGH"
+        elif vol_ratio < 0.8:
+            snap[f"{prefix}_volume_signal"] = "LOW"
+        else:
+            snap[f"{prefix}_volume_signal"] = "NORMAL"
+
+        # ATR
+        snap[f"{prefix}_atr"] = round(float(row.get("atr", 0)), 2)
+
+    # Cross-timeframe macro attributes
     if "H4" in timeframes:
         snap["atr_percentile"] = get_atr_percentile(timeframes["H4"])
 
     return snap
+

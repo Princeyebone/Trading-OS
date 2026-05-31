@@ -1,66 +1,43 @@
 """
-engine/data_fetcher.py — yfinance OHLCV data fetching for XAU/USD.
+engine/data_fetcher.py — OHLCV data fetching for XAU/USD using adapter pattern.
 
 Pulls M15, H1, H4 candles. Validates staleness.
 Returns pandas DataFrames indexed by datetime.
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
-import yfinance as yf
 import pandas as pd
 
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-SYMBOL = "GC=F"          # yfinance ticker for Gold Futures (XAU/USD proxy)
 STALENESS_MINUTES = 20   # if latest candle is older than this → SKIP
-
-# Interval strings for yfinance
-INTERVAL_MAP = {
-    "M15": "15m",
-    "H1":  "60m",
-    "H4":  "1h",   # will resample H1 to H4
-}
-
-# How many bars to fetch per timeframe
-BARS_NEEDED = {
-    "M15": 200,   # ~2 days of M15
-    "H1":  200,   # ~8 days of H1
-    "H4":  200,   # ~33 days of H4
-}
 
 _cache: dict = {}   # simple in-memory cache {timeframe: (fetched_at, df)}
 CACHE_TTL_SECONDS = 60 * 10  # 10 minutes
 
+_fetcher_instance = None
 
-def _fetch_raw(interval: str, period: str) -> Optional[pd.DataFrame]:
-    """Download OHLCV from yfinance."""
-    try:
-        ticker = yf.Ticker(SYMBOL)
-        df = ticker.history(period=period, interval=interval, auto_adjust=True)
-        if df.empty:
-            logger.warning(f"yfinance returned empty DataFrame for interval={interval}")
-            return None
-        df.index = pd.to_datetime(df.index, utc=True)
-        df.columns = [c.lower() for c in df.columns]
-        return df[["open", "high", "low", "close", "volume"]]
-    except Exception as e:
-        logger.error(f"yfinance fetch error: {e}")
-        return None
+def get_fetcher():
+    """Factory to get the configured fetcher instance."""
+    global _fetcher_instance
+    if _fetcher_instance is not None:
+        return _fetcher_instance
 
-
-def _resample_to_h4(h1_df: pd.DataFrame) -> pd.DataFrame:
-    """Resample H1 data to H4 OHLCV."""
-    df = h1_df.resample("4h").agg({
-        "open": "first",
-        "high": "max",
-        "low": "min",
-        "close": "last",
-        "volume": "sum",
-    }).dropna()
-    return df
+    mode = getattr(settings, "data_feed_mode", "yfinance").lower()
+    
+    if mode == "mt5":
+        logger.info("Initializing DataFetcher adapter for MT5")
+        from engine.adapters.mt5_fetcher import MT5Fetcher
+        _fetcher_instance = MT5Fetcher()
+    else:
+        logger.info("Initializing DataFetcher adapter for yfinance")
+        from engine.adapters.yfinance_fetcher import YFinanceFetcher
+        _fetcher_instance = YFinanceFetcher()
+        
+    return _fetcher_instance
 
 
 def fetch_ohlcv(timeframe: str, use_cache: bool = True) -> Optional[pd.DataFrame]:
@@ -77,22 +54,11 @@ def fetch_ohlcv(timeframe: str, use_cache: bool = True) -> Optional[pd.DataFrame
         if age_secs < CACHE_TTL_SECONDS:
             return df
 
-    if timeframe == "M15":
-        df = _fetch_raw("15m", "5d")
-    elif timeframe == "H1":
-        df = _fetch_raw("1h", "30d")
-    elif timeframe == "H4":
-        h1 = _fetch_raw("1h", "60d")
-        df = _resample_to_h4(h1) if h1 is not None else None
-    else:
-        logger.error(f"Unknown timeframe: {timeframe}")
-        return None
+    fetcher = get_fetcher()
+    df = fetcher.fetch_ohlcv(timeframe)
 
     if df is None or df.empty:
         return None
-
-    # Tail to BARS_NEEDED
-    df = df.tail(BARS_NEEDED.get(timeframe, 200))
 
     _cache[timeframe] = (now, df)
     return df

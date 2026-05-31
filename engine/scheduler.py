@@ -24,15 +24,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.db import get_session, is_db_alive
 from engine import data_fetcher, indicators, pattern_detector, claude_analyst, broker_executor, telegram_notifier
+from engine.news_guard import is_news_blackout
 from engine.outcome_monitor import check_and_close_trades
 from app.models.signals import Signal, MarketContext, PatternEvent
 from app.models.trades import Trade, TradeJournal
 from app.models.config import EngineConfig
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-)
+# Force-set the log level for all "engine" loggers and configure direct stdout output
+engine_logger = logging.getLogger("engine")
+engine_logger.setLevel(logging.INFO)
+if not engine_logger.handlers:
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s"))
+    engine_logger.addHandler(sh)
+    engine_logger.propagate = False
+
 logger = logging.getLogger("engine.scheduler")
 
 EST = ZoneInfo("America/New_York")
@@ -95,6 +101,11 @@ def run_preflight(session: Session, config: EngineConfig) -> tuple[bool, str]:
     if len(recent_closed) == config.consecutive_loss_pause:
         if all(t.status == "LOSS" for t in recent_closed):
             return False, f"CONSECUTIVE_LOSS_PAUSE ({config.consecutive_loss_pause} losses)"
+
+    # 6. News blackout — check ForexFactory for high-impact events within ±N minutes
+    in_blackout, event_label = is_news_blackout(config.news_blackout_minutes)
+    if in_blackout:
+        return False, f"NEWS_BLACKOUT ({event_label})"
 
     return True, current_session
 
@@ -194,6 +205,18 @@ def run_engine_cycle():
         ok, result = run_preflight(session, config)
         if not ok:
             logger.info(f"Pre-flight SKIP: {result}")
+            log_signal(
+                session=session,
+                session_name="OFF_HOURS" if "SESSION" in result else "PREFLIGHT",
+                verdict="WAIT",
+                direction=None,
+                confidence=None,
+                skip_reason=result,
+                price=None,
+                prompt_version=1,
+                indicator_snapshot={},
+                patterns_data={}
+            )
             return
 
         current_session = result  # the session name
