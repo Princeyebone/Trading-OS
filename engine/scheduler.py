@@ -235,13 +235,22 @@ def run_engine_cycle():
         snap = indicators.extract_indicator_snapshot(timeframes)
         logger.info(f"Indicators: H4 alignment={snap.get('h4_alignment')} | ATR pct={snap.get('atr_percentile')}")
 
-        # ── ATR filter ──
+        # ── ATR filter (Regime Selector) ──
         if snap.get("atr_percentile", 100) < config.min_atr_percentile:
-            logger.info(f"ATR below {config.min_atr_percentile}th percentile — SKIP (ranging)")
-            log_signal(session, current_session, "WAIT", None, None,
-                       f"ATR_BELOW_THRESHOLD ({snap['atr_percentile']})", snap.get("m15_close"),
-                       1, snap, {"patterns": [], "liquidity": []})
-            return
+            logger.info(f"ATR below {config.min_atr_percentile}th percentile — LOW VOLATILITY REGIME")
+            snap["volatility_regime"] = "LOW_VOLATILITY"
+            snap["regime_constraint"] = (
+                "CONSTRAINT: LOW VOLATILITY regime detected. "
+                "Only ABE or NONE (WAIT) may be selected. "
+                "ABE requires compression structure (range, equal highs/lows, or buildup)."
+            )
+        else:
+            snap["volatility_regime"] = "NORMAL"
+            snap["regime_constraint"] = (
+                "CONSTRAINT: NORMAL volatility regime. "
+                "Evaluate LSR, TCP, and D-FVG. "
+                "ABE is only valid if clear compression structure exists."
+            )
 
         # ── Pattern detection ──
         patterns_data = pattern_detector.detect_all_patterns(timeframes)
@@ -274,6 +283,28 @@ def run_engine_cycle():
         verdict    = analysis.get("verdict", "WAIT")
         direction  = analysis.get("direction")
         confidence = analysis.get("confidence", 0)
+
+        if direction and direction.upper() in ["BULLISH", "BUY", "LONG"]:
+            direction = "LONG"
+        elif direction and direction.upper() in ["BEARISH", "SELL", "SHORT"]:
+            direction = "SHORT"
+        elif direction:
+            direction = direction.upper()
+
+        logger.info(
+            f"Strategy Evaluation | "
+            f"Regime={snap.get('volatility_regime')} | "
+            f"ATR_Pct={snap.get('atr_percentile')} | "
+            f"Selected={analysis.get('strategy_name')} | "
+            f"Verdict={verdict}"
+        )
+
+        if verdict == "WAIT":
+            logger.info(
+                f"Rejected Trade | Reasoning={analysis.get('reasoning')} | "
+                f"WarningFlags={analysis.get('warning_flags')}"
+            )
+
         logger.info(f"{config.ai_provider.upper()} verdict: {verdict} | Direction: {direction} | Confidence: {confidence}%")
 
         # ── Log signal ──

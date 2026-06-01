@@ -83,15 +83,19 @@ STRATEGY 4: Accumulation Breakout Expansion (ABE)
 - Setup: Clear consolidation box, equal highs/lows compression. Volatility squeeze.
 - Invalid if: Already trending strongly, or repeated fakeouts.
 - Trigger: Clean breakout + retest or breakout + continuation.
+- Note: ABE is only valid when low volatility is accompanied by clear consolidation / compression structure (range, equal highs/lows, or buildup).
 
 RULES:
 1. Return ONLY valid JSON.
 2. If the market does not clearly match all REQUIRED conditions for a strategy, or has major invalid conditions, return verdict: "WAIT".
 3. Include a JSON key "strategy_name" (e.g., "LSR", "TCP", "D-FVG", "ABE", or "NONE").
-4. Entry, SL, TP must be derived strictly from the selected strategy's structure and recent swing levels."""
+4. Other strategies should only be selected if strong multi-timeframe confluence exists.
+5. Entry, SL, TP must be derived strictly from the selected strategy's structure and recent swing levels."""
 
             default_template = """MARKET DATA — XAU/USD — {timestamp} — {session} session
 Current Price: {price} | ATR(14): {atr} | ATR Percentile: {atr_pct}
+VOLATILITY REGIME: {volatility_regime}
+{regime_constraint}
 
 INDICATOR STATE:
   H4 — EMA20: {h4_ema20} | EMA50: {h4_ema50} | EMA200: {h4_ema200} | Alignment: {h4_alignment}
@@ -103,7 +107,7 @@ LIQUIDITY LEVELS: {liquidity_json}
 
 Analyse the data and map it against the 4 allowed strategies.
 Return JSON with keys:
-verdict (TRADE/WAIT), strategy_name (LSR/TCP/D-FVG/ABE/NONE), direction, confidence, entry, stop_loss, tp1, tp2, lot_size, rr_ratio, reasoning, warning_flags"""
+verdict (TRADE/WAIT), strategy_name (LSR/TCP/D-FVG/ABE/NONE), direction (LONG/SHORT), confidence, entry, stop_loss, tp1, tp2, lot_size, rr_ratio, reasoning, warning_flags"""
 
             session.add(PromptVersion(
                 version=2,

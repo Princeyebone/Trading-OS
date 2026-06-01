@@ -150,7 +150,8 @@ def _record_close(session: Session, trade: Trade, exit_price: float):
             exit_reason = "SL_HIT"
 
     closed_at = datetime.now(timezone.utc)
-    duration_mins = int((closed_at - trade.opened_at).total_seconds() / 60)
+    opened_at_aware = trade.opened_at.replace(tzinfo=timezone.utc) if trade.opened_at.tzinfo is None else trade.opened_at
+    duration_mins = int((closed_at - opened_at_aware).total_seconds() / 60)
 
     # Update trade record
     trade.status = result

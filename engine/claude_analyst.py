@@ -65,6 +65,8 @@ def build_prompt(
         price=snap.get("m15_close", "N/A"),
         atr=snap.get("m15_atr", "N/A"),
         atr_pct=snap.get("atr_percentile", "N/A"),
+        volatility_regime=snap.get("volatility_regime", "UNKNOWN"),
+        regime_constraint=snap.get("regime_constraint", ""),
         h4_ema20=snap.get("h4_ema_20", "N/A"),
         h4_ema50=snap.get("h4_ema_50", "N/A"),
         h4_ema200=snap.get("h4_ema_200", "N/A"),
