@@ -31,6 +31,7 @@ class ConfigUpdate(BaseModel):
     news_blackout_minutes: Optional[int] = None
     engine_interval_minutes: Optional[int] = None
     telegram_enabled: Optional[bool] = None
+    ai_provider: Optional[str] = None
 
 
 def _get_or_create_config(session: Session) -> EngineConfig:

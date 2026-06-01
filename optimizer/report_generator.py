@@ -78,14 +78,28 @@ def run_full_optimizer(period_start=None, period_end=None):
     4. Send Telegram notification
     """
     from optimizer.data_aggregator import aggregate_weekly_stats
-    from optimizer.claude_optimizer import run_optimizer_analysis
+    from optimizer.claude_optimizer import run_optimizer_analysis as claude_run
+    from optimizer.qwen_optimizer import run_optimizer_analysis as qwen_run
+    from app.models.config import EngineConfig
+    from sqlmodel import select
 
     logger.info("Optimizer starting...")
 
     stats = aggregate_weekly_stats(period_start, period_end)
     logger.info(f"Stats aggregated: {stats['total_trades']} trades | {stats['win_rate']}% win rate")
 
-    suggestions = run_optimizer_analysis(stats)
+    session = get_session()
+    config = session.exec(select(EngineConfig).where(EngineConfig.is_active == True)).first()
+    session.close()
+
+    provider = config.ai_provider.lower() if config else "claude"
+    logger.info(f"Using optimizer provider: {provider.upper()}")
+
+    if provider == "qwen":
+        suggestions = qwen_run(stats)
+    else:
+        suggestions = claude_run(stats)
+
     if not suggestions:
         logger.error("Optimizer analysis failed — no suggestions generated")
         return None

@@ -23,7 +23,7 @@ from sqlmodel import Session, select
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.db import get_session, is_db_alive
-from engine import data_fetcher, indicators, pattern_detector, claude_analyst, broker_executor, telegram_notifier
+from engine import data_fetcher, indicators, pattern_detector, claude_analyst, qwen_analyst, broker_executor, telegram_notifier
 from engine.news_guard import is_news_blackout
 from engine.outcome_monitor import check_and_close_trades
 from app.models.signals import Signal, MarketContext, PatternEvent
@@ -265,9 +265,12 @@ def run_engine_cycle():
             "daily_trades": daily_count,
         }
 
-        # ── Claude analysis ──
-        logger.info("Calling Claude API...")
-        analysis = claude_analyst.analyse_market(snap, patterns_data, current_session, account_state)
+        # ── AI Analysis ──
+        logger.info(f"Calling {config.ai_provider.upper()} API...")
+        if config.ai_provider.lower() == "qwen":
+            analysis = qwen_analyst.analyse_market(snap, patterns_data, current_session, account_state)
+        else:
+            analysis = claude_analyst.analyse_market(snap, patterns_data, current_session, account_state)
         verdict    = analysis.get("verdict", "WAIT")
         direction  = analysis.get("direction")
         confidence = analysis.get("confidence", 0)

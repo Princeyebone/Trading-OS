@@ -44,6 +44,9 @@ class EngineConfig(SQLModel, table=True):
     # Notifications
     telegram_enabled: bool = Field(default=True)
 
+    # AI
+    ai_provider: str = Field(default="claude", max_length=20)
+
     # Meta
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_by: str = Field(default="system", max_length=50)
