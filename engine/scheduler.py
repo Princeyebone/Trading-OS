@@ -274,7 +274,7 @@ def run_engine_cycle():
         verdict    = analysis.get("verdict", "WAIT")
         direction  = analysis.get("direction")
         confidence = analysis.get("confidence", 0)
-        logger.info(f"Claude verdict: {verdict} | Direction: {direction} | Confidence: {confidence}%")
+        logger.info(f"{config.ai_provider.upper()} verdict: {verdict} | Direction: {direction} | Confidence: {confidence}%")
 
         # ── Log signal ──
         signal = log_signal(

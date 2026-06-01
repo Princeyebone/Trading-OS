@@ -129,9 +129,15 @@ def call_qwen(
         return _mock_wait_response(reason=f"API error: {e}")
 
     # Parse JSON from response
+    logger.info(f"Qwen raw response preview: {raw_text[:300] if raw_text else 'EMPTY'}")
     parsed = _parse_response(raw_text)
 
     # Store to DB (reusing ClaudeResponse table for simplicity, maybe rename later)
+    # Prepend strategy_name to reasoning so it gets saved without schema changes
+    strategy = parsed.get("strategy_name", "NONE")
+    original_reasoning = parsed.get("reasoning", "")
+    parsed["reasoning"] = f"[Strategy: {strategy}] {original_reasoning}"
+
     _store_response(
         signal_id=signal_id,
         prompt_version=prompt_version,
@@ -214,6 +220,7 @@ def _mock_wait_response(reason: str = "Stub mode") -> dict:
         "momentum_analysis": "N/A",
         "sentiment_analysis": "N/A",
         "risk_analysis": "N/A",
+        "strategy_name": "NONE",
         "reasoning": reason,
         "warning_flags": ["STUB_MODE"],
     }

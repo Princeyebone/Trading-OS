@@ -124,6 +124,11 @@ def call_claude(
     parsed = _parse_response(raw_text)
 
     # Store to DB
+    # Prepend strategy_name to reasoning so it gets saved without schema changes
+    strategy = parsed.get("strategy_name", "NONE")
+    original_reasoning = parsed.get("reasoning", "")
+    parsed["reasoning"] = f"[Strategy: {strategy}] {original_reasoning}"
+
     _store_response(
         signal_id=signal_id,
         prompt_version=prompt_version,
@@ -197,6 +202,7 @@ def _mock_wait_response(reason: str = "Stub mode") -> dict:
         "momentum_analysis": "N/A",
         "sentiment_analysis": "N/A",
         "risk_analysis": "N/A",
+        "strategy_name": "NONE",
         "reasoning": reason,
         "warning_flags": ["STUB_MODE"],
     }

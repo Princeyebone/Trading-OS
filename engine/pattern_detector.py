@@ -231,38 +231,58 @@ def detect_liquidity_levels(df: pd.DataFrame) -> List[Dict]:
 
 def detect_all_patterns(timeframes: dict) -> dict:
     """
-    Run all pattern detectors on H1 and M15.
+    Run all pattern detectors on H4, H1 and M15.
+    Returns a balanced mix across timeframes so the AI sees the full picture.
+    Each timeframe contributes its own bucket — no single timeframe crowds out others.
     Returns {"patterns": [...], "liquidity": [...]}
     """
-    patterns = []
-    liquidity = []
+    patterns_by_tf = {}
+    liquidity_by_tf = {}
 
-    for tf in ["H1", "M15"]:
+    for tf in ["H4", "H1", "M15"]:
         if tf not in timeframes:
             continue
         df = timeframes[tf]
 
         obs = detect_order_blocks(df)
+        fvgs = detect_fair_value_gaps(df)
+        bos = detect_break_of_structure(df)
+        liq = detect_liquidity_levels(df)
+
+        tf_patterns = []
         for ob in obs:
             ob["timeframe"] = tf
-            patterns.append(ob)
-
-        fvgs = detect_fair_value_gaps(df)
+            tf_patterns.append(ob)
         for fvg in fvgs:
             fvg["timeframe"] = tf
-            patterns.append(fvg)
-
-        bos = detect_break_of_structure(df)
+            tf_patterns.append(fvg)
         for b in bos:
             b["timeframe"] = tf
-            patterns.append(b)
-
-        liq = detect_liquidity_levels(df)
+            tf_patterns.append(b)
         for l in liq:
             l["timeframe"] = tf
-            liquidity.append(l)
+
+        patterns_by_tf[tf] = tf_patterns
+        liquidity_by_tf[tf] = liq
+
+    # Build balanced output: up to 4 patterns per timeframe (H4, H1, M15) = max 12
+    # Priority order within each TF: BOS first (highest signal), then OB, then FVG
+    def sort_key(p):
+        order = {"BREAK_OF_STRUCTURE": 0, "ORDER_BLOCK": 1, "FAIR_VALUE_GAP": 2}
+        return order.get(p["type"], 3)
+
+    final_patterns = []
+    per_tf_limit = 4
+    for tf in ["H4", "H1", "M15"]:
+        bucket = sorted(patterns_by_tf.get(tf, []), key=sort_key)
+        final_patterns.extend(bucket[:per_tf_limit])
+
+    # Liquidity: 2 per timeframe = 6 total
+    final_liquidity = []
+    for tf in ["H4", "H1", "M15"]:
+        final_liquidity.extend(liquidity_by_tf.get(tf, [])[:2])
 
     return {
-        "patterns": patterns[:10],    # cap at 10
-        "liquidity": liquidity[:6],   # cap at 6
+        "patterns": final_patterns,
+        "liquidity": final_liquidity,
     }
