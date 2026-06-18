@@ -8,8 +8,9 @@ from sqlmodel import Session
 from app.settings import settings
 
 from alembic.config import Config
+from alembic.config import Config
 from alembic import command
-from app.routers import trades, signals, performance, optimizer, prompts, config, system
+from app.routers import trades, signals, performance, optimizer, prompts, config, system, charts
 from app.models import (  # noqa: F401 — import all models so SQLModel registers them
     Signal, MarketContext, PatternEvent, ClaudeResponse,
     Trade, TradeOutcome, TradeJournal,
@@ -19,23 +20,46 @@ from app.models import (  # noqa: F401 — import all models so SQLModel registe
 
 
 from engine.scheduler import start_background_scheduler
+import subprocess
+import sys
+import logging
 
 _scheduler = None
+_realtime_monitor_process = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run database migrations on startup using Alembic."""
-    global _scheduler
+    global _scheduler, _realtime_monitor_process
     alembic_cfg = Config("alembic.ini")
     command.upgrade(alembic_cfg, "head")
     # Seed default engine config if none exists
     _seed_defaults()
     
     _scheduler = start_background_scheduler()
+    
+    # Start Real-Time Monitor daemon
+    try:
+        _realtime_monitor_process = subprocess.Popen(
+            [sys.executable, "-m", "engine.realtime_monitor"],
+            cwd="c:\\Users\\HP\\OneDrive\\Desktop\\tb\\backend"
+        )
+        logging.info(f"Started realtime_monitor daemon (PID: {_realtime_monitor_process.pid})")
+    except Exception as e:
+        logging.error(f"Failed to start realtime_monitor daemon: {e}")
+        
     yield
     
     if _scheduler:
         _scheduler.shutdown()
+        
+    if _realtime_monitor_process:
+        logging.info("Shutting down realtime_monitor daemon...")
+        _realtime_monitor_process.terminate()
+        try:
+            _realtime_monitor_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _realtime_monitor_process.kill()
 
 
 def _seed_defaults():
@@ -80,20 +104,34 @@ STRATEGY 3: Displacement + Fair Value Gap Fill (D-FVG)
 
 STRATEGY 4: Accumulation Breakout Expansion (ABE)
 - Regime: Tight range, low ATR percentile.
-- Setup: Clear consolidation box, equal highs/lows compression. Volatility squeeze.
+- Setup: ANY ONE of the following: compression, OR liquidity clustering, OR repeated rejections near same level.
 - Invalid if: Already trending strongly, or repeated fakeouts.
 - Trigger: Clean breakout + retest or breakout + continuation.
-- Note: ABE is only valid when low volatility is accompanied by clear consolidation / compression structure (range, equal highs/lows, or buildup).
+- Note: ABE is valid if the market shows probabilistic structure: compression OR liquidity clustering OR repeated rejections near the same level.
 
 RULES:
 1. Return ONLY valid JSON.
 2. If the market does not clearly match all REQUIRED conditions for a strategy, or has major invalid conditions, return verdict: "WAIT".
 3. Include a JSON key "strategy_name" (e.g., "LSR", "TCP", "D-FVG", "ABE", or "NONE").
 4. Other strategies should only be selected if strong multi-timeframe confluence exists.
-5. Entry, SL, TP must be derived strictly from the selected strategy's structure and recent swing levels."""
+5. Entry, SL, TP must be derived strictly from the selected strategy's structure and recent swing levels.
+
+CRITICAL ENTRY RULE — TEMPORAL VALIDITY:
+- The Current Price shown in the user prompt is the LIVE market price RIGHT NOW.
+- Your entry price MUST be within 5.0 points of the Current Price, OR you must output verdict: WAIT.
+- DO NOT reference historical swing highs/lows as your entry if price is not near them now.
+- If the ideal entry zone is not currently active, output WAIT and wait for price to come to you.
+- Entries above or below the live price by more than 5 points will be REJECTED by the execution engine.
+
+CRITICAL TP SIZING RULE:
+- TP1 MUST be 1.0 to 1.5 Gold points (10-15 pips) from entry. This is a quick profit harvest target, NOT a structural target.
+- TP2 MUST be 3.0 to 5.0 Gold points (30-50 pips) from entry. This is the medium trailing target.
+- Structural targets (200+ pips) are managed by the trailing stop engine, NOT by TP levels.
+- Example SHORT from 4446: TP1=4445.0, TP2=4443.0. DO NOT set TP1 at 4420 or lower."""
 
             default_template = """MARKET DATA — XAU/USD — {timestamp} — {session} session
 Current Price: {price} | ATR(14): {atr} | ATR Percentile: {atr_pct}
+NOTE: Entry must be within 5 points of {price}. If your setup entry is not near {price}, return WAIT.
 VOLATILITY REGIME: {volatility_regime}
 {regime_constraint}
 
@@ -144,6 +182,7 @@ app.include_router(optimizer.router)
 app.include_router(prompts.router)
 app.include_router(config.router)
 app.include_router(system.router)
+app.include_router(charts.router)
 
 @app.get("/")
 def root():

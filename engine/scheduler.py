@@ -12,7 +12,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -24,10 +24,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.db import get_session, is_db_alive
 from engine import data_fetcher, indicators, pattern_detector, claude_analyst, qwen_analyst, broker_executor, telegram_notifier
+from engine.rule_engine import evaluate_all as rule_engine_evaluate
 from engine.news_guard import is_news_blackout
 from engine.outcome_monitor import check_and_close_trades
+from engine.trade_manager import manage_open_trades
+from engine.market_tape_monitor import detect_tape_events
 from app.models.signals import Signal, MarketContext, PatternEvent
-from app.models.trades import Trade, TradeJournal
+from app.models.trades import Trade, TradeJournal, StraddlePair
+from app.models.tape import TapeEvent
 from app.models.config import EngineConfig
 
 # Force-set the log level for all "engine" loggers and configure direct stdout output
@@ -56,6 +60,7 @@ def get_current_session(config: EngineConfig) -> str | None:
 
     in_london = config.london_start_hour <= hour < config.london_end_hour
     in_ny     = config.ny_start_hour <= hour < config.ny_end_hour
+    in_asian  = hour >= 19 or hour < 3  # 7 PM EST to 3 AM EST
 
     if in_london and in_ny:
         return "OVERLAP"
@@ -63,6 +68,9 @@ def get_current_session(config: EngineConfig) -> str | None:
         return "LONDON"
     elif in_ny:
         return "NY"
+    elif in_asian:
+        return "ASIAN"
+        
     return None
 
 
@@ -85,7 +93,8 @@ def run_preflight(session: Session, config: EngineConfig) -> tuple[bool, str]:
     daily_trades = session.exec(
         select(Trade).where(Trade.opened_at >= today_start).where(Trade.status != "CANCELLED")
     ).all()
-    if len(daily_trades) >= config.max_trades_per_day:
+    # 1. Daily max trades (0 means unlimited)
+    if config.max_trades_per_day > 0 and len(daily_trades) >= config.max_trades_per_day:
         return False, f"DAILY_LIMIT_REACHED ({len(daily_trades)}/{config.max_trades_per_day})"
 
     # 4. Max open trades
@@ -233,23 +242,46 @@ def run_engine_cycle():
         # ── Indicators ──
         timeframes = indicators.compute_all_indicators(timeframes)
         snap = indicators.extract_indicator_snapshot(timeframes)
-        logger.info(f"Indicators: H4 alignment={snap.get('h4_alignment')} | ATR pct={snap.get('atr_percentile')}")
+        h4_atr = snap.get('h4_atr_percentile', 50.0)
+        h1_atr = snap.get('h1_atr_percentile', 50.0)
+        logger.info(f"Indicators: H4 alignment={snap.get('h4_alignment')} | ATR pct: H4={h4_atr}% H1={h1_atr}%")
 
         # ── ATR filter (Regime Selector) ──
-        if snap.get("atr_percentile", 100) < config.min_atr_percentile:
-            logger.info(f"ATR below {config.min_atr_percentile}th percentile — LOW VOLATILITY REGIME")
-            snap["volatility_regime"] = "LOW_VOLATILITY"
+        min_atr = config.min_atr_percentile
+        h4_align = snap.get('h4_alignment', 'MIXED')
+        
+        if h4_atr < min_atr and h1_atr < min_atr:
+            if h4_align in ["BULLISH", "BEARISH"]:
+                logger.info(f"Clean H4 trend detected ({h4_align}) — TREND_OVERRIDE active, TCP permitted")
+                snap["volatility_regime"] = "TREND_OVERRIDE"
+                snap["regime_constraint"] = (
+                    "CONSTRAINT: TREND_OVERRIDE regime (Low volatility but clean H4 trend). "
+                    "Only TCP (Trend Continuation Pullback) or NONE (WAIT) may be selected. "
+                    "ABE and LSR are forbidden due to low volatility."
+                )
+            else:
+                logger.info(f"ATR (H4 & H1) below {min_atr}th percentile — LOW VOLATILITY REGIME")
+                snap["volatility_regime"] = "LOW_VOLATILITY"
+                snap["regime_constraint"] = (
+                    "CONSTRAINT: LOW VOLATILITY regime detected (Genuine chop). "
+                    "Only ABE or NONE (WAIT) may be selected. "
+                    "ABE requires ANY ONE of: compression, OR liquidity clustering, OR repeated rejections near same level."
+                )
+        elif h4_atr < min_atr and h1_atr >= min_atr:
+            logger.info(f"ATR H4 < {min_atr}% BUT H1 >= {min_atr}% — SESSION VOLATILITY REGIME (Intraday Spike)")
+            snap["volatility_regime"] = "SESSION_VOLATILITY"
             snap["regime_constraint"] = (
-                "CONSTRAINT: LOW VOLATILITY regime detected. "
-                "Only ABE or NONE (WAIT) may be selected. "
-                "ABE requires compression structure (range, equal highs/lows, or buildup)."
+                "CONSTRAINT: SESSION VOLATILITY regime (Intraday spike detected despite macro chop). "
+                "Evaluate LSR and TCP. "
+                "ABE is valid if there is compression OR liquidity clustering."
             )
         else:
+            logger.info(f"ATR H4 >= {min_atr}% — NORMAL VOLATILITY REGIME")
             snap["volatility_regime"] = "NORMAL"
             snap["regime_constraint"] = (
                 "CONSTRAINT: NORMAL volatility regime. "
                 "Evaluate LSR, TCP, and D-FVG. "
-                "ABE is only valid if clear compression structure exists."
+                "ABE is only valid if there is compression OR liquidity clustering OR repeated rejections near same level."
             )
 
         # ── Pattern detection ──
@@ -274,12 +306,63 @@ def run_engine_cycle():
             "daily_trades": daily_count,
         }
 
-        # ── AI Analysis ──
-        logger.info(f"Calling {config.ai_provider.upper()} API...")
-        if config.ai_provider.lower() == "qwen":
-            analysis = qwen_analyst.analyse_market(snap, patterns_data, current_session, account_state)
+        # ── Tape Metrics (Raw Order Flow Features) ──
+        now = datetime.now(timezone.utc)
+        fifteen_mins_ago = now - timedelta(minutes=15)
+        tape_events = session.exec(
+            select(TapeEvent).where(TapeEvent.created_at >= fifteen_mins_ago).order_by(TapeEvent.created_at.desc())
+        ).all()
+        
+        last_sweep = next((e for e in tape_events if e.event_type == "LIQUIDITY_SWEEP"), None)
+        
+        tape_metrics = {
+            "sweeps_15m": sum(1 for e in tape_events if e.event_type == "LIQUIDITY_SWEEP"),
+            "cluster_touches_15m": sum(1 for e in tape_events if e.event_type == "CLUSTER_TOUCH"),
+            "rejections_15m": sum(1 for e in tape_events if e.event_type == "REJECTION"),
+            "bullish_sweeps": sum(1 for e in tape_events if e.event_type == "LIQUIDITY_SWEEP" and e.direction == "BULLISH"),
+            "bearish_sweeps": sum(1 for e in tape_events if e.event_type == "LIQUIDITY_SWEEP" and e.direction == "BEARISH"),
+            "last_sweep_age_minutes": int((now - last_sweep.created_at.replace(tzinfo=timezone.utc)).total_seconds() / 60) if last_sweep else None,
+            "liquidity_pressure_score": round(len(tape_events) / 15.0, 2)
+        }
+
+        # ── Deterministic Rule Engine (runs BEFORE AI — zero API cost) ──
+        rule_signal = rule_engine_evaluate(timeframes)
+        if rule_signal["verdict"] == "TRADE":
+            logger.info(
+                f"DETERMINISTIC SIGNAL FIRED | {rule_signal['strategy']} | "
+                f"Skipping AI call | direction={rule_signal['direction']} "
+                f"entry={rule_signal['entry']} sl={rule_signal['sl']} "
+                f"tp1={rule_signal['tp1']} rr={rule_signal['rr']}"
+            )
+            # Build an analysis-compatible dict so the rest of the pipeline is unchanged
+            analysis = {
+                "verdict":       rule_signal["verdict"],
+                "strategy_name": rule_signal["strategy"],
+                "direction":     rule_signal["direction"],
+                "confidence":    rule_signal["confidence"],
+                "entry":         rule_signal["entry"],
+                "stop_loss":     rule_signal["sl"],
+                "tp1":           rule_signal["tp1"],
+                "tp2":           rule_signal["tp2"],
+                "rr_ratio":      rule_signal["rr"],
+                "reasoning":     f"Deterministic {rule_signal['strategy']} — {rule_signal['reason']}",
+                "warning_flags": [],
+                "prompt_version": 0,  # 0 = no prompt used
+            }
         else:
-            analysis = claude_analyst.analyse_market(snap, patterns_data, current_session, account_state)
+            # Rule engine said WAIT — log why and fall through to AI
+            logger.info(
+                f"Rule engine WAIT | reason={rule_signal.get('reason')} | "
+                f"rules={rule_signal.get('rules_checked')} | Falling back to AI"
+            )
+
+            # ── AI Analysis ──
+            logger.info(f"Calling {config.ai_provider.upper()} API...")
+            if config.ai_provider.lower() == "qwen":
+                analysis = qwen_analyst.analyse_market(snap, patterns_data, current_session, account_state, tape_metrics)
+            else:
+                analysis = claude_analyst.analyse_market(snap, patterns_data, current_session, account_state, tape_metrics)
+
         verdict    = analysis.get("verdict", "WAIT")
         direction  = analysis.get("direction")
         confidence = analysis.get("confidence", 0)
@@ -305,7 +388,8 @@ def run_engine_cycle():
                 f"WarningFlags={analysis.get('warning_flags')}"
             )
 
-        logger.info(f"{config.ai_provider.upper()} verdict: {verdict} | Direction: {direction} | Confidence: {confidence}%")
+        source = "DETERMINISTIC" if rule_signal["verdict"] == "TRADE" else config.ai_provider.upper()
+        logger.info(f"{source} verdict: {verdict} | Direction: {direction} | Confidence: {confidence}%")
 
         # ── Log signal ──
         signal = log_signal(
@@ -313,9 +397,8 @@ def run_engine_cycle():
             snap.get("m15_close"), analysis.get("prompt_version", 1), snap, patterns_data
         )
 
-        # ── Confidence gate ──
-        if verdict != "TRADE" or (confidence or 0) < config.confidence_threshold:
-            logger.info(f"WAIT — confidence {confidence}% < threshold {config.confidence_threshold}%")
+        # ── Execution gate (Confidence removed) ──
+        if verdict != "TRADE":
             return
 
         # ── H4 trend alignment gate ──
@@ -346,20 +429,138 @@ def run_engine_cycle():
             return
 
         sl_pips = abs(entry - sl) * 10
-        lot_size = analysis.get("lot_size") or compute_lot_size(config, sl_pips)
+        # STRICT RISK MANAGEMENT: Do NOT trust the AI's lot_size hallucination
+        lot_size = compute_lot_size(config, sl_pips)
+
+        # ── Execution Gate v1 (Temporal Mismatch Filter) ──
+        # Fixes the exact flaw where AI predicts a zone (e.g. 4490) but live price is far away (e.g. 4470).
+        live_price = snap.get("m15_close")
+        ENTRY_TOLERANCE_POINTS = 3.0  # 30 pips for Gold
+        
+        # ── ABE STRADDLE OVERRIDE ──
+        strategy_name = analysis.get("strategy_name", "")
+        is_abe = "ABE" in strategy_name.upper() or "ALPHA BREAKOUT" in strategy_name.upper()
+
+        if is_abe:
+            # 0. Check Realtime Monitor Heartbeat (Dead-man switch)
+            import os, time
+            try:
+                if not os.path.exists(".realtime_heartbeat"):
+                    raise FileNotFoundError("No heartbeat file")
+                with open(".realtime_heartbeat", "r") as f:
+                    last_hb = float(f.read().strip())
+                if time.time() - last_hb > 180: # 3 minutes
+                    raise ValueError("Heartbeat stale")
+            except Exception as e:
+                logger.error(f"CRITICAL: REALTIME MONITOR OFFLINE ({e}). Blocking Straddle.")
+                signal.verdict = "WAIT"
+                signal.skip_reason = "REALTIME_MONITOR_OFFLINE"
+                session.add(signal)
+                session.commit()
+                return
+
+            # 1. Enforce Bilateral Liquidity requirement
+            liquidity_clusters = patterns_data.get("liquidity", [])
+            has_upper = any(c.get("subtype") == "EQUAL_HIGHS" for c in liquidity_clusters)
+            has_lower = any(c.get("subtype") == "EQUAL_LOWS" for c in liquidity_clusters)
+            
+            if not (has_upper and has_lower):
+                logger.info("ABE BLOCKED: Missing Bilateral Liquidity structure")
+                signal.verdict = "WAIT"
+                signal.skip_reason = "MISSING_BILATERAL_LIQUIDITY"
+                session.add(signal)
+                session.commit()
+                return
+                
+            # 2. Check for active straddles (Singleton Constraint)
+            active_straddles = session.exec(select(StraddlePair).where(StraddlePair.status == "ACTIVE")).all()
+            if active_straddles:
+                logger.info("ABE BLOCKED: An ACTIVE straddle pair already exists")
+                signal.verdict = "WAIT"
+                signal.skip_reason = "STRADDLE_ALREADY_ACTIVE"
+                session.add(signal)
+                session.commit()
+                return
+            
+            # 3. Calculate straddle bounds
+            upper_bounds = [c["level"] for c in liquidity_clusters if c["subtype"] == "EQUAL_HIGHS"]
+            lower_bounds = [c["level"] for c in liquidity_clusters if c["subtype"] == "EQUAL_LOWS"]
+            
+            buy_stop = max(upper_bounds) + 0.5
+            sell_stop = min(lower_bounds) - 0.5
+            
+            sl_dist = abs(entry - sl)
+            if sl_dist == 0: sl_dist = 3.0
+            tp1_dist = abs(entry - tp1)
+            if tp1_dist == 0: tp1_dist = sl_dist * 2
+            
+            if DRY_RUN:
+                logger.info(f"[DRY RUN] Would straddle: BS={buy_stop}, SS={sell_stop}")
+                return
+                
+            logger.info(f"Executing ABE Straddle: BS={buy_stop}, SS={sell_stop}")
+            order_result = broker_executor.place_straddle_orders(
+                buy_stop_price=buy_stop,
+                sell_stop_price=sell_stop,
+                lot_size=lot_size,
+                sl_dist=sl_dist,
+                tp1_dist=tp1_dist,
+                expiration_hours=4
+            )
+            
+            if not order_result["success"]:
+                logger.error(f"Straddle failed: {order_result['error']}")
+                return
+                
+            straddle = StraddlePair(
+                signal_id=signal.id,
+                buy_order_id=order_result["buy_order_id"],
+                sell_order_id=order_result["sell_order_id"],
+                buy_entry=buy_stop,
+                sell_entry=sell_stop,
+                status="ACTIVE"
+            )
+            session.add(straddle)
+            session.commit()
+            
+            telegram_notifier.notify_trade_executed(
+                direction="STRADDLE",
+                entry=live_price,
+                stop_loss=buy_stop - sl_dist,
+                tp1=buy_stop + tp1_dist,
+                tp2=0,
+                lot_size=lot_size,
+                confidence=confidence,
+                order_id=f"BS:{order_result['buy_order_id']}|SS:{order_result['sell_order_id']}",
+                reasoning=f"ABE Bilateral Straddle Placed. BuyStop={buy_stop}, SellStop={sell_stop}",
+            )
+            return
+
+        # Regular execution tolerance check
+        price_distance = abs(live_price - entry)
+        if price_distance > ENTRY_TOLERANCE_POINTS:
+            logger.info(
+                f"ENTRY BLOCKED | Price too far from zone | "
+                f"live={live_price}, entry={entry}, diff={price_distance:.2f}, tol={ENTRY_TOLERANCE_POINTS}"
+            )
+            signal.verdict = "WAIT"
+            signal.skip_reason = "PRICE_TOO_FAR"
+            session.add(signal)
+            session.commit()
+            return
 
         # ── Demo execution ──
         if DRY_RUN:
             logger.info(f"[DRY RUN] Would execute: {direction} {lot_size} lots @ {entry} SL={sl} TP1={tp1}")
             return
 
-        logger.info(f"Executing: {direction} {lot_size} lots @ ~{entry}")
+        logger.info(f"Executing: {direction} {lot_size} lots @ ~{entry} (Virtual TP1={tp1})")
         order_result = broker_executor.place_order(
             direction=direction,
             lot_size=lot_size,
             entry_price=entry,
             stop_loss=sl,
-            take_profit=tp1,
+            take_profit=0.0,  # HYBRID EXIT ENGINE: TP managed virtually
         )
 
         if not order_result["success"]:
@@ -419,8 +620,11 @@ def start_background_scheduler():
     DRY_RUN = False  # Production backend implies live execution, unless toggled elsewhere
     
     scheduler = BackgroundScheduler(timezone="America/New_York")
-    scheduler.add_job(run_engine_cycle, "interval", minutes=15, id="engine_cycle")
-    scheduler.add_job(check_and_close_trades, "interval", minutes=5, id="outcome_monitor")
+    # Fire exactly at minute 0, 15, 30, 45 (candle close)
+    scheduler.add_job(run_engine_cycle, "cron", minute="0,15,30,45", id="engine_cycle")
+    scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
+    scheduler.add_job(manage_open_trades, "cron", minute="*", id="trade_manager")
+    scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
     
     logger.info("🚀 Background Engine scheduler started inside FastAPI")
     scheduler.start()
@@ -442,10 +646,12 @@ def main():
         run_engine_cycle()
         return
 
-    # Also monitor open trades every 5 minutes
+    # Also monitor open trades every 5 minutes and manage trades every 1 min
     scheduler = BlockingScheduler(timezone="America/New_York")
-    scheduler.add_job(run_engine_cycle, "interval", minutes=15, id="engine_cycle")
-    scheduler.add_job(check_and_close_trades, "interval", minutes=5, id="outcome_monitor")
+    scheduler.add_job(run_engine_cycle, "cron", minute="0,15,30,45", id="engine_cycle")
+    scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
+    scheduler.add_job(manage_open_trades, "cron", minute="*", id="trade_manager")
+    scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
 
     logger.info("🚀 Engine scheduler started — running every 15 minutes")
     logger.info("   Press Ctrl+C to stop")

@@ -29,7 +29,10 @@ _client: Optional[anthropic.Anthropic] = None
 def _get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        _client = anthropic.Anthropic(
+            api_key=ANTHROPIC_API_KEY,
+            timeout=45.0,
+        )
     return _client
 
 
@@ -45,6 +48,7 @@ def build_prompt(
     patterns: dict,
     session_name: str,
     account_state: dict,
+    tape_metrics: dict = None,
     macro_context: str = "No major news events in the next 15 minutes.",
 ) -> tuple[str, str]:
     """
@@ -83,6 +87,7 @@ def build_prompt(
         balance=account_state.get("balance", 500),
         open_trades=account_state.get("open_trades", 0),
         daily_trades=account_state.get("daily_trades", 0),
+        tape_metrics_json=json.dumps(tape_metrics or {}, indent=2),
     )
 
     return active_prompt.system_prompt, user_prompt, active_prompt.version
@@ -215,6 +220,7 @@ def analyse_market(
     patterns: dict,
     session_name: str,
     account_state: dict,
+    tape_metrics: dict = None,
 ) -> dict:
     """
     Full analysis pipeline: build prompt → call Claude → return parsed verdict.
@@ -222,7 +228,7 @@ def analyse_market(
     """
     try:
         system_prompt, user_prompt, prompt_version = build_prompt(
-            indicator_snapshot, patterns, session_name, account_state
+            indicator_snapshot, patterns, session_name, account_state, tape_metrics
         )
         return call_claude(system_prompt, user_prompt, prompt_version)
     except Exception as e:

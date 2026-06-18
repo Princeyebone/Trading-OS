@@ -18,7 +18,8 @@ STUB_MODE = settings.telegram_stub_mode
 def _send(message: str):
     """Send a Telegram message synchronously."""
     if STUB_MODE or not BOT_TOKEN or not CHAT_ID:
-        logger.info(f"[TELEGRAM STUB] {message[:100]}...")
+        safe_msg = message.encode('ascii', 'ignore').decode('ascii')
+        logger.info(f"[TELEGRAM STUB] {safe_msg[:100]}...")
         return
 
     try:

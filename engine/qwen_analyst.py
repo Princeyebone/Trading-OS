@@ -21,7 +21,7 @@ from app.settings import settings
 logger = logging.getLogger(__name__)
 
 QWEN_API_KEY = settings.qwen_api_key
-DEFAULT_MODEL = "qwen-plus"
+DEFAULT_MODEL = "qwen-max"
 DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
 _client: Optional[openai.OpenAI] = None
@@ -33,6 +33,7 @@ def _get_client() -> openai.OpenAI:
         _client = openai.OpenAI(
             api_key=QWEN_API_KEY,
             base_url=DASHSCOPE_BASE_URL,
+            timeout=45.0,
         )
     return _client
 
@@ -49,6 +50,7 @@ def build_prompt(
     patterns: dict,
     session_name: str,
     account_state: dict,
+    tape_metrics: dict = None,
     macro_context: str = "No major news events in the next 15 minutes.",
 ) -> tuple[str, str]:
     """
@@ -68,7 +70,7 @@ def build_prompt(
         session=session_name,
         price=snap.get("m15_close", "N/A"),
         atr=snap.get("m15_atr", "N/A"),
-        atr_pct=snap.get("atr_percentile", "N/A"),
+        atr_pct=f"H4: {snap.get('h4_atr_percentile', 'N/A')}% | H1: {snap.get('h1_atr_percentile', 'N/A')}%",
         volatility_regime=snap.get("volatility_regime", "UNKNOWN"),
         regime_constraint=snap.get("regime_constraint", ""),
         h4_ema20=snap.get("h4_ema_20", "N/A"),
@@ -87,6 +89,7 @@ def build_prompt(
         balance=account_state.get("balance", 500),
         open_trades=account_state.get("open_trades", 0),
         daily_trades=account_state.get("daily_trades", 0),
+        tape_metrics_json=json.dumps(tape_metrics or {}, indent=2),
     )
 
     return active_prompt.system_prompt, user_prompt, active_prompt.version
@@ -233,13 +236,14 @@ def analyse_market(
     patterns: dict,
     session_name: str,
     account_state: dict,
+    tape_metrics: dict = None,
 ) -> dict:
     """
     Full analysis pipeline: build prompt → call Qwen → return parsed verdict.
     """
     try:
         system_prompt, user_prompt, prompt_version = build_prompt(
-            indicator_snapshot, patterns, session_name, account_state
+            indicator_snapshot, patterns, session_name, account_state, tape_metrics
         )
         return call_qwen(system_prompt, user_prompt, prompt_version)
     except Exception as e:

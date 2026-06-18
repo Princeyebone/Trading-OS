@@ -188,7 +188,11 @@ def extract_indicator_snapshot(timeframes: dict) -> dict:
 
     # Cross-timeframe macro attributes
     if "H4" in timeframes:
-        snap["atr_percentile"] = get_atr_percentile(timeframes["H4"])
+        snap["h4_atr_percentile"] = get_atr_percentile(timeframes["H4"], lookback=120)
+        # Keep backwards compatibility for any hardcoded references
+        snap["atr_percentile"] = snap["h4_atr_percentile"]
+    if "H1" in timeframes:
+        snap["h1_atr_percentile"] = get_atr_percentile(timeframes["H1"], lookback=120)
 
     return snap
 

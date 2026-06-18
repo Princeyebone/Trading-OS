@@ -113,17 +113,19 @@ def check_and_close_trades():
 def _get_exit_price_from_broker(trade: Trade) -> Optional[float]:
     """
     Retrieve the actual close price from MT5 history.
-    Falls back to TP1 or SL if history not available.
     """
     try:
         import MetaTrader5 as mt5
         if not mt5.initialize():
             return None
-        history = mt5.history_orders_get(ticket=int(trade.broker_order_id or 0))
-        if history:
-            return float(history[-1].price_current)
-    except Exception:
-        pass
+            
+        deals = mt5.history_deals_get(position=int(trade.broker_order_id or 0))
+        if deals:
+            for d in reversed(deals):
+                if d.entry == 1:  # DEAL_ENTRY_OUT
+                    return float(d.price)
+    except Exception as e:
+        logger.error(f"Error getting exit price for trade {trade.id}: {e}")
     return None
 
 
