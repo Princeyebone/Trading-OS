@@ -108,3 +108,11 @@ def notify_optimizer_ready():
 def notify_error(component: str, error: str):
     msg = f"⚠️ <b>Engine Error [{component}]</b>\n<code>{error[:500]}</code>"
     _send(msg)
+
+def notify_info(title: str, message: str):
+    msg = f"ℹ️ <b>{title}</b>\n{message}"
+    _send(msg)
+
+def notify_success(title: str, message: str):
+    msg = f"🎉 <b>{title}</b>\n{message}"
+    _send(msg)

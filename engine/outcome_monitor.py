@@ -19,17 +19,16 @@ logger = logging.getLogger(__name__)
 
 
 def _compute_result(trade: Trade, exit_price: float) -> str:
-    """Determine WIN, LOSS, or BE based on exit price vs SL/TP."""
+    """Determine WIN, LOSS, or BE based on actual PnL since SL/TP are dynamic."""
     if trade.direction == "LONG":
-        if exit_price >= trade.take_profit_1:
-            return "WIN"
-        elif exit_price <= trade.stop_loss:
-            return "LOSS"
+        pips = (exit_price - trade.actual_entry) if trade.actual_entry else 0
     else:  # SHORT
-        if exit_price <= trade.take_profit_1:
-            return "WIN"
-        elif exit_price >= trade.stop_loss:
-            return "LOSS"
+        pips = (trade.actual_entry - exit_price) if trade.actual_entry else 0
+        
+    if pips > 0:
+        return "WIN"
+    elif pips < 0:
+        return "LOSS"
     return "BE"
 
 

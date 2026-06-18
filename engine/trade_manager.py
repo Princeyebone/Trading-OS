@@ -49,15 +49,6 @@ def manage_open_trades():
         live_bid = tick.bid
         live_ask = tick.ask
         
-        # Calculate dynamic ATR for trailing stop
-        rates = mt5.copy_rates_from(broker_executor.SYMBOL, mt5.TIMEFRAME_M15, tick.time, 15)
-        dynamic_trail = TRAIL_DISTANCE_PIPS
-        if rates is not None and len(rates) >= 15:
-            df = pd.DataFrame(rates)
-            df['tr'] = pd.concat([df['high']-df['low'], abs(df['high']-df['close'].shift()), abs(df['low']-df['close'].shift())], axis=1).max(axis=1)
-            atr_pips = df['tr'].rolling(14).mean().iloc[-1] * 10
-            dynamic_trail = max(40.0, atr_pips * 0.5)
-        
         for trade in open_trades:
             if not trade.broker_order_id:
                 continue
@@ -70,90 +61,59 @@ def manage_open_trades():
             if not mt5_pos:
                 continue
                 
+            # Determine Step Size based on Signal
+            step_size_pips = 30.0  # Default for TCP (3.0 points)
+            if trade.signal_id:
+                from app.models.signals import Signal
+                sig = session.get(Signal, trade.signal_id)
+                if sig and sig.session == "SCALP":
+                    step_size_pips = 15.0  # Default for Scalp (1.5 points)
+                
             # Calculate live profit in pips
             if trade.direction == "LONG":
                 profit_pips = (live_bid - entry) * 10
             else:
                 profit_pips = (entry - live_ask) * 10
                 
+            trade_type = "SCALP" if step_size_pips == 15.0 else "TCP"
+            logger.info(f"📊 [Step TP Monitor] Trade #{trade.id} ({trade_type}): Current Profit = {profit_pips/10.0:.2f} pts | Locked = {trade.locked_profit_pips/10.0:.2f} pts")
+                
             # Update highest profit
+            dirty = False
             if profit_pips > trade.highest_profit_pips:
                 trade.highest_profit_pips = profit_pips
-                session.add(trade)
-                session.commit()
+                dirty = True
                 
-            # Calculate if virtual TP1 is hit
-            if trade.direction == "LONG":
-                tp1_hit_now = live_bid >= trade.take_profit_1
-            else:
-                tp1_hit_now = live_ask <= trade.take_profit_1
-
-            # Step 1: TP1 Partial Close (50%) + Atomic Break-Even Move (ACTIVE -> PROTECTED)
-            if not trade.tp1_hit and tp1_hit_now:
-                logger.info(f"Trade #{trade.id} reached virtual TP1 ({trade.take_profit_1}). Executing {TP1_CLOSE_PERCENT}% partial close.")
-                success = broker_executor.close_partial_position(ticket, TP1_CLOSE_PERCENT)
+            # --- Ratcheting TP Logic ---
+            # 1. Lock in profits if we crossed a new step threshold
+            if profit_pips >= trade.locked_profit_pips + step_size_pips:
+                new_lock = (profit_pips // step_size_pips) * step_size_pips
+                if new_lock > trade.locked_profit_pips:
+                    trade.locked_profit_pips = new_lock
+                    dirty = True
+                    logger.info(f"🔒 LOCKED {trade.locked_profit_pips/10.0:.1f} pts profit for trade #{trade.id}")
+                    telegram_notifier.notify_info("Step TP", f"🔒 Trade #{trade.id} LOCKED +{trade.locked_profit_pips/10.0:.1f} pts")
+                    
+                    # Optionally move SL natively to protect MT5 state if server dies
+                    # (Break-even + locked profit - buffer)
+                    protect_pips = trade.locked_profit_pips - (step_size_pips * 0.5)
+                    if protect_pips > 0:
+                        new_sl = entry + (protect_pips / 10.0) if trade.direction == "LONG" else entry - (protect_pips / 10.0)
+                        broker_executor.modify_position_sl(ticket, new_sl)
+            
+            # 2. Check for Reversal (Close Condition)
+            if trade.locked_profit_pips > 0 and profit_pips < trade.locked_profit_pips:
+                logger.info(f"🎯 STEP TP TRIGGERED for trade #{trade.id}! Reversal detected. Closing at locked {trade.locked_profit_pips/10.0:.1f} pts.")
+                success = broker_executor.close_position(ticket)
                 if success:
-                    trade.tp1_hit = True
-                    
-                    # ATOMIC BE MOVE
-                    logger.info(f"Trade #{trade.id} moving SL to Break-Even + Buffer immediately after TP1.")
-                    new_sl = entry + (BUFFER_PIPS / 10.0) if trade.direction == "LONG" else entry - (BUFFER_PIPS / 10.0)
-                    MAX_BE_RETRIES = 3
-                    
-                    for attempt in range(MAX_BE_RETRIES):
-                        be_success = broker_executor.modify_position_sl(ticket, new_sl)
-                        if be_success:
-                            trade.break_even_moved = True
-                            break
-                            
-                        if attempt == 0:
-                            telegram_notifier.notify_error("Trade Manager", f"BE move failed on first attempt for trade #{trade.id}")
-                            
-                    if not trade.break_even_moved:
-                        logger.warning(f"All {MAX_BE_RETRIES} BE retries failed with buffer for #{trade.id}. Attempting exact entry fallback.")
-                        fallback_sl = entry
-                        fallback_success = broker_executor.modify_position_sl(ticket, fallback_sl)
-                        if fallback_success:
-                            trade.break_even_moved = True
-                            
-                    session.add(trade)
-                    session.commit()
-                    
-            # Step 2: Retry Break-Even Move (if atomic move failed previously)
-            elif trade.tp1_hit and not trade.break_even_moved:
-                logger.info(f"Trade #{trade.id} retrying SL move to Break-Even.")
-                new_sl = entry + (BUFFER_PIPS / 10.0) if trade.direction == "LONG" else entry - (BUFFER_PIPS / 10.0)
-                MAX_BE_RETRIES = 3
-                
-                for attempt in range(MAX_BE_RETRIES):
-                    success = broker_executor.modify_position_sl(ticket, new_sl)
-                    if success:
-                        trade.break_even_moved = True
-                        break
-                        
-                    if attempt == 0:
-                        telegram_notifier.notify_error("Trade Manager", f"Delayed BE move failed on first attempt for trade #{trade.id}")
-                
-                if not trade.break_even_moved:
-                    logger.warning(f"All {MAX_BE_RETRIES} delayed BE retries failed for #{trade.id}. Attempting exact entry fallback.")
-                    fallback_sl = entry
-                    fallback_success = broker_executor.modify_position_sl(ticket, fallback_sl)
-                    if fallback_success:
-                        trade.break_even_moved = True
-                        
+                    trade.status = "WIN"
+                    dirty = True
+                    telegram_notifier.notify_success("Step TP Hit", f"🎯 Trade #{trade.id} closed at +{trade.locked_profit_pips/10.0:.1f} pts!")
+            
+            if dirty:
                 session.add(trade)
                 session.commit()
-                    
-            # Step 3: Dynamic Trailing Stop for Runner (TRAILING Phase)
-            if trade.tp1_hit and trade.break_even_moved:
-                if profit_pips < (trade.highest_profit_pips - dynamic_trail):
-                    logger.info(f"Trade #{trade.id} hit trailing stop distance ({dynamic_trail:.1f} pips). Closing runner. (Highest: {trade.highest_profit_pips:.1f}, Current: {profit_pips:.1f})")
-                    success = broker_executor.close_position(ticket)
-                    if success:
-                        trade.status = "WIN" 
-                        session.add(trade)
-                        session.commit()
-
+                
     except Exception as e:
         logger.exception(f"Trade Manager loop error: {e}")
     finally:

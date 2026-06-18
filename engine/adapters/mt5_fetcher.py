@@ -13,6 +13,7 @@ class MT5Fetcher(BaseDataFetcher):
     def __init__(self, default_symbol: str = "XAUUSD"):
         self.default_symbol = default_symbol
         self.bars_needed = {
+            "M5":  300,
             "M15": 200,
             "H1":  200,
             "H4":  200,
@@ -34,7 +35,9 @@ class MT5Fetcher(BaseDataFetcher):
         symbol = self._get_symbol()
 
         # Map string timeframe to MT5 constant
-        if timeframe == "M15":
+        if timeframe == "M5":
+            mt5_tf = mt5.TIMEFRAME_M5
+        elif timeframe == "M15":
             mt5_tf = mt5.TIMEFRAME_M15
         elif timeframe == "H1":
             mt5_tf = mt5.TIMEFRAME_H1

@@ -28,6 +28,7 @@ class Trade(SQLModel, table=True):
     tp1_hit: bool = Field(default=False)
     break_even_moved: bool = Field(default=False)
     highest_profit_pips: float = Field(default=0.0)
+    locked_profit_pips: float = Field(default=0.0)
     status: str = Field(default="OPEN", max_length=20)  # OPEN, WIN, LOSS, BE, CANCELLED
     broker_order_id: Optional[str] = Field(default=None, max_length=100)
     broker: str = Field(default="MT5", max_length=20)

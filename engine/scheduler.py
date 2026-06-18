@@ -29,6 +29,7 @@ from engine.news_guard import is_news_blackout
 from engine.outcome_monitor import check_and_close_trades
 from engine.trade_manager import manage_open_trades
 from engine.market_tape_monitor import detect_tape_events
+from engine.scalping_integration import ScalpingIntegration
 from app.models.signals import Signal, MarketContext, PatternEvent
 from app.models.trades import Trade, TradeJournal, StraddlePair
 from app.models.tape import TapeEvent
@@ -350,18 +351,22 @@ def run_engine_cycle():
                 "prompt_version": 0,  # 0 = no prompt used
             }
         else:
-            # Rule engine said WAIT — log why and fall through to AI
+            # Rule engine said WAIT — log why and DO NOT fall back to AI (AI is disabled)
             logger.info(
                 f"Rule engine WAIT | reason={rule_signal.get('reason')} | "
-                f"rules={rule_signal.get('rules_checked')} | Falling back to AI"
+                f"rules={rule_signal.get('rules_checked')} | AI disabled, skipping."
             )
 
-            # ── AI Analysis ──
-            logger.info(f"Calling {config.ai_provider.upper()} API...")
-            if config.ai_provider.lower() == "qwen":
-                analysis = qwen_analyst.analyse_market(snap, patterns_data, current_session, account_state, tape_metrics)
-            else:
-                analysis = claude_analyst.analyse_market(snap, patterns_data, current_session, account_state, tape_metrics)
+            # ── AI Disabled ──
+            analysis = {
+                "verdict": "WAIT",
+                "strategy_name": "NONE",
+                "direction": None,
+                "confidence": 0,
+                "reasoning": "Deterministic rule engine returned WAIT. AI analyst is disabled.",
+                "warning_flags": [],
+                "prompt_version": 0,
+            }
 
         verdict    = analysis.get("verdict", "WAIT")
         direction  = analysis.get("direction")
@@ -554,13 +559,13 @@ def run_engine_cycle():
             logger.info(f"[DRY RUN] Would execute: {direction} {lot_size} lots @ {entry} SL={sl} TP1={tp1}")
             return
 
-        logger.info(f"Executing: {direction} {lot_size} lots @ ~{entry} (Virtual TP1={tp1})")
+        logger.info(f"Executing: {direction} {lot_size} lots @ ~{entry} (Step-Trailing TP)")
         order_result = broker_executor.place_order(
             direction=direction,
             lot_size=lot_size,
             entry_price=entry,
             stop_loss=sl,
-            take_profit=0.0,  # HYBRID EXIT ENGINE: TP managed virtually
+            take_profit=0.0,  # CRITICAL: TP is 0.0 for Ratcheting TP system
         )
 
         if not order_result["success"]:
@@ -613,6 +618,40 @@ def run_engine_cycle():
     finally:
         session.close()
 
+# ─── Scalping Job ──────────────────────────────────────────────────────────────
+_scalping_integration = None
+
+def run_scalping_cycle():
+    """Runs every minute to check for scalping signals on M5 data."""
+    global DRY_RUN, _scalping_integration
+    
+    if _scalping_integration is None:
+        _scalping_integration = ScalpingIntegration()
+        
+    logger.info("Scalping cycle starting...")
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config:
+            logger.warning("No EngineConfig found. Scalping skipped.")
+            return
+            
+        if not config.is_active:
+            return
+            
+        executed = _scalping_integration.check_and_execute(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"Scalp Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("Scalping Engine", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"Scalping cycle error: {e}")
+    finally:
+        session.close()
+
 
 # ─── Entry point ────────────────────────────────────────────────────────────────
 def start_background_scheduler():
@@ -623,8 +662,9 @@ def start_background_scheduler():
     # Fire exactly at minute 0, 15, 30, 45 (candle close)
     scheduler.add_job(run_engine_cycle, "cron", minute="0,15,30,45", id="engine_cycle")
     scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
-    scheduler.add_job(manage_open_trades, "cron", minute="*", id="trade_manager")
+    scheduler.add_job(manage_open_trades, "interval", seconds=5, id="trade_manager")
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
+    scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle")
     
     logger.info("🚀 Background Engine scheduler started inside FastAPI")
     scheduler.start()
@@ -650,8 +690,9 @@ def main():
     scheduler = BlockingScheduler(timezone="America/New_York")
     scheduler.add_job(run_engine_cycle, "cron", minute="0,15,30,45", id="engine_cycle")
     scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
-    scheduler.add_job(manage_open_trades, "cron", minute="*", id="trade_manager")
+    scheduler.add_job(manage_open_trades, "interval", seconds=5, id="trade_manager")
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
+    scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle")
 
     logger.info("🚀 Engine scheduler started — running every 15 minutes")
     logger.info("   Press Ctrl+C to stop")

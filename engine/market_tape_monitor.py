@@ -101,11 +101,12 @@ def _emit_event(session: Session, event_type: str, price: float, level: str, dir
     session.commit()
     
     # The required JSON log output
-    log_obj = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "event": event_type,
-        "price": price,
-        "level": level,
-        "strength": 1.0
-    }
-    logger.info(f"TAPE: {json.dumps(log_obj)}")
+    # Muting this in terminal because it floods the console (frontend fetches from DB anyway)
+    # log_obj = {
+    #     "timestamp": datetime.now(timezone.utc).isoformat(),
+    #     "event": event_type,
+    #     "price": price,
+    #     "level": level,
+    #     "strength": 1.0
+    # }
+    # logger.debug(f"TAPE: {json.dumps(log_obj)}")
