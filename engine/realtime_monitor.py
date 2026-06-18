@@ -101,16 +101,34 @@ def write_heartbeat():
     except Exception as e:
         logger.error(f"Heartbeat write failed: {e}")
 
+def check_volatility():
+    """Check and log current market volatility regime."""
+    from engine.indicators import get_current_atr
+    atr = get_current_atr("M15")
+    if atr is None:
+        return
+    if atr > 9.0:
+        logger.warning(f"🔴 EXTREME VOLATILITY: ATR={atr:.2f}")
+    elif atr > 6.0:
+        logger.warning(f"🟠 HIGH VOLATILITY: ATR={atr:.2f}")
+    elif atr > 3.0:
+        logger.info(f"🟡 NORMAL VOLATILITY: ATR={atr:.2f}")
+    else:
+        logger.info(f"🟢 LOW VOLATILITY: ATR={atr:.2f}")
+
 def run_monitor_cycle():
     logger.info("Realtime monitor cycle starting...")
     
     # 0. Heartbeat dead-man switch
     write_heartbeat()
     
-    # 1. Straddle risk management checks (Highest Priority)
+    # 1. Volatility Heartbeat
+    check_volatility()
+    
+    # 2. Straddle risk management checks (Highest Priority)
     check_active_straddles()
 
-    # 2. Tape event detection (Lower Priority)
+    # 3. Tape event detection (Lower Priority)
     market_tape_monitor.detect_tape_events()
 
 

@@ -14,6 +14,7 @@ class YFinanceFetcher(BaseDataFetcher):
         
         # How many bars to fetch per timeframe (internal to yfinance to get enough data)
         self.bars_needed = {
+            "M5":  600,   # ~2 days of M5
             "M15": 200,   # ~2 days of M15
             "H1":  200,   # ~8 days of H1
             "H4":  200,   # ~33 days of H4
@@ -53,7 +54,9 @@ class YFinanceFetcher(BaseDataFetcher):
         return df
 
     def fetch_ohlcv(self, timeframe: str) -> Optional[pd.DataFrame]:
-        if timeframe == "M15":
+        if timeframe == "M5":
+            df = self._fetch_raw("5m", "5d")
+        elif timeframe == "M15":
             df = self._fetch_raw("15m", "5d")
         elif timeframe == "H1":
             df = self._fetch_raw("1h", "30d")

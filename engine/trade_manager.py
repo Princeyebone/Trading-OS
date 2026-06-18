@@ -61,13 +61,22 @@ def manage_open_trades():
             if not mt5_pos:
                 continue
                 
-            # Determine Step Size based on Signal
-            step_size_pips = 30.0  # Default for TCP (3.0 points)
+            # Determine Lock Configuration based on Signal
             if trade.signal_id:
                 from app.models.signals import Signal
                 sig = session.get(Signal, trade.signal_id)
                 if sig and sig.session == "SCALP":
-                    step_size_pips = 15.0  # Default for Scalp (1.5 points)
+                    start_lock_pips = 10.0
+                    step_gain_pips = 10.0
+                    step_lock_pips = 10.0
+                else:
+                    start_lock_pips = 10.0
+                    step_gain_pips = 20.0
+                    step_lock_pips = 20.0
+            else:
+                start_lock_pips = 10.0
+                step_gain_pips = 20.0
+                step_lock_pips = 20.0
                 
             # Calculate live profit in pips
             if trade.direction == "LONG":
@@ -75,7 +84,7 @@ def manage_open_trades():
             else:
                 profit_pips = (entry - live_ask) * 10
                 
-            trade_type = "SCALP" if step_size_pips == 15.0 else "TCP"
+            trade_type = "SCALP" if step_gain_pips == 10.0 else "TCP"
             logger.info(f"📊 [Step TP Monitor] Trade #{trade.id} ({trade_type}): Current Profit = {profit_pips/10.0:.2f} pts | Locked = {trade.locked_profit_pips/10.0:.2f} pts")
                 
             # Update highest profit
@@ -84,29 +93,45 @@ def manage_open_trades():
                 trade.highest_profit_pips = profit_pips
                 dirty = True
                 
-            # --- Ratcheting TP Logic ---
-            # 1. Lock in profits if we crossed a new step threshold
-            if profit_pips >= trade.locked_profit_pips + step_size_pips:
-                new_lock = (profit_pips // step_size_pips) * step_size_pips
-                if new_lock > trade.locked_profit_pips:
-                    trade.locked_profit_pips = new_lock
-                    dirty = True
-                    logger.info(f"🔒 LOCKED {trade.locked_profit_pips/10.0:.1f} pts profit for trade #{trade.id}")
-                    telegram_notifier.notify_info("Step TP", f"🔒 Trade #{trade.id} LOCKED +{trade.locked_profit_pips/10.0:.1f} pts")
-                    
-                    # Optionally move SL natively to protect MT5 state if server dies
-                    # (Break-even + locked profit - buffer)
-                    protect_pips = trade.locked_profit_pips - (step_size_pips * 0.5)
-                    if protect_pips > 0:
-                        new_sl = entry + (protect_pips / 10.0) if trade.direction == "LONG" else entry - (protect_pips / 10.0)
-                        broker_executor.modify_position_sl(ticket, new_sl)
+            # --- Dynamic Ratcheting TP Logic ---
+            # 1. Calculate the new lock level based on dynamic steps
+            new_lock = 0.0
+            if trade_type == "TCP":
+                profit_pts = profit_pips / 10.0
+                if profit_pts >= 1.0:
+                    step = 1.0 + float(int((profit_pts - 1.0) // 2.0)) * 2.0
+                    if step == 1.0:
+                        new_lock_pts = 1.0
+                    elif step == 3.0:
+                        new_lock_pts = 2.0
+                    elif step == 5.0:
+                        new_lock_pts = 4.0
+                    else:
+                        new_lock_pts = step - 2.0
+                    new_lock = new_lock_pts * 10.0
+            else:
+                if profit_pips >= start_lock_pips:
+                    steps = int((profit_pips - start_lock_pips) // step_gain_pips)
+                    new_lock = start_lock_pips + (steps * step_lock_pips)
+            
+            if new_lock > trade.locked_profit_pips:
+                trade.locked_profit_pips = new_lock
+                dirty = True
+                logger.info(f"🔒 LOCKED {trade.locked_profit_pips/10.0:.2f} pts profit for trade #{trade.id}")
+                telegram_notifier.notify_info("Step TP", f"🔒 Trade #{trade.id} LOCKED +{trade.locked_profit_pips/10.0:.2f} pts")
+                
+                # Optionally move SL natively to protect MT5 state if server dies
+                # (Break-even + locked profit - buffer)
+                protect_pips = trade.locked_profit_pips - (step_gain_pips * 0.5)
+                if protect_pips >= 0:
+                    new_sl = entry + (protect_pips / 10.0) if trade.direction == "LONG" else entry - (protect_pips / 10.0)
+                    broker_executor.modify_position_sl(ticket, new_sl)
             
             # 2. Check for Reversal (Close Condition)
             if trade.locked_profit_pips > 0 and profit_pips < trade.locked_profit_pips:
                 logger.info(f"🎯 STEP TP TRIGGERED for trade #{trade.id}! Reversal detected. Closing at locked {trade.locked_profit_pips/10.0:.1f} pts.")
                 success = broker_executor.close_position(ticket)
                 if success:
-                    trade.status = "WIN"
                     dirty = True
                     telegram_notifier.notify_success("Step TP Hit", f"🎯 Trade #{trade.id} closed at +{trade.locked_profit_pips/10.0:.1f} pts!")
             

@@ -169,6 +169,22 @@ def score_m15_bos(m15: pd.DataFrame, direction: str) -> tuple[int, str]:
             
     return 0, "NO_BOS"
 
+def score_m15_crown(m15: pd.DataFrame, direction: str) -> tuple[int, str]:
+    if len(m15) < 2:
+        return 0, "INSUFFICIENT_M15"
+        
+    current = m15.iloc[-1]
+    prev = m15.iloc[-2]
+    
+    if direction == "BULLISH":
+        if float(prev['close']) > float(prev['open']) and float(current['close']) > float(current['open']) and float(current['open']) >= float(prev['close']):
+            return 100, "CROWN_MOMENTUM"
+    else:
+        if float(prev['close']) < float(prev['open']) and float(current['close']) < float(current['open']) and float(current['open']) <= float(prev['close']):
+            return 100, "CROWN_MOMENTUM"
+            
+    return 0, "NO_CROWN"
+
 # ─── Evaluators ──────────────────────────────────────────────────────────────
 
 def _evaluate_tcp(timeframes: dict, direction: str) -> dict:
@@ -202,6 +218,11 @@ def _evaluate_tcp(timeframes: dict, direction: str) -> dict:
     score += pts_bos
     reasons.append(f"BOS:{r_bos}({pts_bos})")
     
+    pts_crown, r_crown = score_m15_crown(m15, direction)
+    score += pts_crown
+    if pts_crown > 0:
+        reasons.append(f"CROWN:{r_crown}({pts_crown})")
+    
     # Base signal threshold
     if score < 70:
         return {
@@ -218,34 +239,37 @@ def _evaluate_tcp(timeframes: dict, direction: str) -> dict:
         m15_atr = abs(recent_high - recent_low)
         
     entry = float(m15.iloc[-1]["close"])
-    sl_dist  = m15_atr * 1.5
     
-    if direction == "BEARISH":
-        sl = round(recent_high + sl_dist, 2)
-    else:
-        sl = round(recent_low - sl_dist, 2)
-        
-    risk = abs(entry - sl)
+    from engine.adaptive_parameters import AdaptiveParameters
+    adapter = AdaptiveParameters(m15_atr, 'TCP')
+    params = adapter.params
     
-    # We set TP1 to always enforce at least a 1.2 RR ratio based on actual risk
-    if direction == "BEARISH":
-        tp1 = round(entry - (risk * 1.2), 2)
-        tp2 = round(entry - (risk * 2.0), 2)
-    else:
-        tp1 = round(entry + (risk * 1.2), 2)
-        tp2 = round(entry + (risk * 2.0), 2)
-        
-    reward = abs(tp1 - entry)
-    rr_ratio = round(reward / risk, 2) if risk > 0 else 0.0
-    
-    # Check if Risk is too enormous (e.g., > 3 ATR) to filter out wild market chop
-    if risk > (m15_atr * 3.0):
+    if not params['should_trade']:
         return {
             "verdict": "WAIT", "strategy": strategy, 
-            "reason": f"RISK_TOO_LARGE_{risk:.2f}", 
+            "reason": f"ADAPTIVE_SKIP: {params['reason']}", 
             "rules_checked": {"score": score, "breakdown": "|".join(reasons)}
         }
+    
+    # Base SL/TP from adaptive parameters
+    sl_dist = params['sl']
+    tp_dist = params['tp']
+    
+    # Adjust SL using recent high/low context but enforce minimum adaptive distance
+    if direction == "BEARISH":
+        sl = max(round(recent_high + sl_dist * 0.5, 2), entry + sl_dist)
+        tp1 = round(entry - tp_dist, 2)
+        tp2 = round(entry - (tp_dist * 1.5), 2)
+    else:
+        sl = min(round(recent_low - sl_dist * 0.5, 2), entry - sl_dist)
+        tp1 = round(entry + tp_dist, 2)
+        tp2 = round(entry + (tp_dist * 1.5), 2)
+        
+    risk = abs(entry - sl)
+    reward = abs(tp1 - entry)
+    rr_ratio = round(reward / risk, 2) if risk > 0 else 0.0
 
+    logger.info(adapter.get_summary())
     logger.info(f"SCORING SIGNAL FIRED | {strategy} | score={score} breakdown={'|'.join(reasons)} entry={entry} rr={rr_ratio}")
 
     return {

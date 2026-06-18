@@ -58,6 +58,18 @@ def compute_atr(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
     return df
 
 
+def get_current_atr(timeframe: str = "M15") -> Optional[float]:
+    """Fetch current ATR directly via data_fetcher without full evaluation loop."""
+    from engine.data_fetcher import fetch_ohlcv
+    df = fetch_ohlcv(timeframe)
+    if df is None or df.empty:
+        return None
+    if "atr" not in df.columns:
+        df = compute_atr(df)
+    return float(df["atr"].iloc[-1])
+
+
+
 def get_atr_percentile(df: pd.DataFrame, lookback: int = 30 * 4) -> float:
     """
     Compute current ATR's percentile rank over the last `lookback` bars.

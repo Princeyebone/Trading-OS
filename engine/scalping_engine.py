@@ -424,22 +424,97 @@ def detect_range_breakout_scalp(m5_data: pd.DataFrame, current_idx: int, lookbac
             
     return None, None
 
+def detect_base_momentum_scalp(m5_data: pd.DataFrame, current_idx: int) -> tuple[str | None, dict | None]:
+    """
+    Base Momentum Setup:
+    Previous candle was BEARISH (close < open).
+    Current candle is BEARISH (close < open).
+    Current candle opened AT or BELOW the previous candle's close (the 'base').
+    => BEARISH momentum continuation scalp.
+    """
+    if current_idx < 1:
+        return None, None
+        
+    current = m5_data.iloc[current_idx]
+    prev = m5_data.iloc[current_idx - 1]
+    
+    # Prev candle must be BEARISH
+    if float(prev['close']) >= float(prev['open']):
+        return None, None
+        
+    # Current candle opened at or below previous close (allow 0.09 pt micro-gap tolerance)
+    if float(current['open']) > float(prev['close']) + 0.09:
+        return None, None
+        
+    return 'BEARISH', {
+        'setup_type': 'BASE_MOMENTUM',
+        'prev_close': round(float(prev['close']), 2),
+        'curr_open': round(float(current['open']), 2),
+        'curr_close': round(float(current['close']), 2)
+    }
+
+def detect_crown_momentum_scalp(m5_data: pd.DataFrame, current_idx: int) -> tuple[str | None, dict | None]:
+    """
+    Crown Momentum Setup:
+    Previous candle was BULLISH (close > open).
+    Current candle is BULLISH (close > open).
+    Current candle opened AT or ABOVE the previous candle's close (the 'crown').
+    => BULLISH momentum continuation scalp.
+    """
+    if current_idx < 1:
+        return None, None
+        
+    current = m5_data.iloc[current_idx]
+    prev = m5_data.iloc[current_idx - 1]
+    
+    # Prev candle must be BULLISH
+    if float(prev['close']) <= float(prev['open']):
+        return None, None
+        
+    # Current candle opened at or above previous close (allow 0.09 pt micro-gap tolerance)
+    if float(current['open']) < float(prev['close']) - 0.09:
+        return None, None
+        
+    return 'BULLISH', {
+        'setup_type': 'CROWN_MOMENTUM',
+        'prev_close': round(float(prev['close']), 2),
+        'curr_open': round(float(current['open']), 2),
+        'curr_close': round(float(current['close']), 2)
+    }
+
 def execute_scalp_signal(signal: dict) -> dict:
     price = signal['price']
     direction = signal['direction']
     
+    from engine.indicators import get_current_atr
+    from engine.adaptive_parameters import AdaptiveParameters
+    
+    m15_atr = get_current_atr('M15') or 5.0
+    adapter = AdaptiveParameters(m15_atr, 'SCALP')
+    params = adapter.params
+    
+    if not params['should_trade']:
+        signal['verdict'] = 'WAIT'
+        signal['skip_reason'] = f"ADAPTIVE_SKIP: {params['reason']}"
+        return signal
+        
+    sl_dist = params['sl']
+    tp_dist = params['tp']
+    
     if direction == 'BULLISH':
         entry = price + 0.1
-        sl = price - 5.0
-        tp1 = price + 8.0
-        tp2 = price + 12.0
+        sl = entry - sl_dist
+        tp1 = entry + tp_dist
+        tp2 = entry + (tp_dist * 1.5)
     else:
         entry = price - 0.1
-        sl = price + 5.0
-        tp1 = price - 8.0
-        tp2 = price - 12.0
+        sl = entry + sl_dist
+        tp1 = entry - tp_dist
+        tp2 = entry - (tp_dist * 1.5)
         
     rr = (tp1 - entry) / (entry - sl) if direction == 'BULLISH' else (entry - tp1) / (sl - entry)
+    
+    logger.info(adapter.get_summary())
     
     signal.update({
         'entry': round(entry, 2),
@@ -517,6 +592,30 @@ class ScalpingEngine:
                 'price': float(self.m5_data['close'].iloc[current_idx])
             }
             signals.append(execute_scalp_signal(rb_sig))
+            
+        # 6. Base Momentum
+        bm_dir, bm_det = detect_base_momentum_scalp(self.m5_data, current_idx)
+        if bm_dir:
+            bm_sig = {
+                'type': 'BASE_MOMENTUM',
+                'direction': bm_dir,
+                'details': bm_det,
+                'timestamp': self.m5_data.index[current_idx],
+                'price': float(self.m5_data['close'].iloc[current_idx])
+            }
+            signals.append(execute_scalp_signal(bm_sig))
+            
+        # 7. Crown Momentum
+        cm_dir, cm_det = detect_crown_momentum_scalp(self.m5_data, current_idx)
+        if cm_dir:
+            cm_sig = {
+                'type': 'CROWN_MOMENTUM',
+                'direction': cm_dir,
+                'details': cm_det,
+                'timestamp': self.m5_data.index[current_idx],
+                'price': float(self.m5_data['close'].iloc[current_idx])
+            }
+            signals.append(execute_scalp_signal(cm_sig))
             
         return signals
         

@@ -46,6 +46,11 @@ class ScalpingIntegration:
         
         executed = []
         for signal in new_signals:
+            # Skip signals that were adaptively skipped
+            if signal.get('verdict') == 'WAIT':
+                logger.info(f"Signal skipped: {signal.get('skip_reason')}")
+                continue
+                
             # Check if this signal was already executed
             if self._is_duplicate(signal):
                 continue

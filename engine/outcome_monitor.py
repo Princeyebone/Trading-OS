@@ -18,28 +18,23 @@ from app.models.trades import Trade, TradeOutcome, TradeJournal
 logger = logging.getLogger(__name__)
 
 
-def _compute_result(trade: Trade, exit_price: float) -> str:
-    """Determine WIN, LOSS, or BE based on actual PnL since SL/TP are dynamic."""
-    if trade.direction == "LONG":
-        pips = (exit_price - trade.actual_entry) if trade.actual_entry else 0
-    else:  # SHORT
-        pips = (trade.actual_entry - exit_price) if trade.actual_entry else 0
-        
-    if pips > 0:
+def _compute_result(actual_profit: float) -> str:
+    """Determine WIN, LOSS, or BE based on actual PnL."""
+    if actual_profit > 0:
         return "WIN"
-    elif pips < 0:
+    elif actual_profit < 0:
         return "LOSS"
     return "BE"
 
 
-def _compute_pnl(trade: Trade, exit_price: float) -> tuple[float, float]:
-    """Returns (pnl_pips, pnl_dollars). Gold: 1 pip ≈ $0.10 per micro lot."""
+def _compute_pnl(trade: Trade, exit_price: float, actual_profit: float) -> tuple[float, float]:
+    """Returns (pnl_pips, pnl_dollars)."""
     if trade.direction == "LONG":
         pips = (exit_price - trade.actual_entry) * 10 if trade.actual_entry else 0
     else:
         pips = (trade.actual_entry - exit_price) * 10 if trade.actual_entry else 0
-    dollars = pips * 1.0 * trade.lot_size * 100  # approximate
-    return round(pips, 1), round(dollars, 2)
+    
+    return round(pips, 1), round(actual_profit, 2)
 
 
 def _compute_r_achieved(trade: Trade, exit_price: float) -> float:
@@ -95,12 +90,12 @@ def check_and_close_trades():
             if trade.broker_order_id and trade.broker_order_id not in open_tickets:
                 # Find the position that closed — get exit price from broker history
                 # For now use the last known price (simplified)
-                exit_price = _get_exit_price_from_broker(trade)
+                exit_price, actual_profit = _get_exit_data_from_broker(trade)
                 if exit_price is None:
                     logger.warning(f"Cannot determine exit price for trade {trade.id}")
                     continue
 
-                _record_close(session, trade, exit_price)
+                _record_close(session, trade, exit_price, actual_profit)
 
     except Exception as e:
         logger.error(f"check_and_close_trades error: {e}")
@@ -109,29 +104,34 @@ def check_and_close_trades():
         session.close()
 
 
-def _get_exit_price_from_broker(trade: Trade) -> Optional[float]:
+def _get_exit_data_from_broker(trade: Trade) -> tuple[Optional[float], float]:
     """
-    Retrieve the actual close price from MT5 history.
+    Retrieve the actual close price and exact broker profit from MT5 history.
     """
     try:
         import MetaTrader5 as mt5
         if not mt5.initialize():
-            return None
+            return None, 0.0
             
         deals = mt5.history_deals_get(position=int(trade.broker_order_id or 0))
         if deals:
-            for d in reversed(deals):
+            exit_price = None
+            total_profit = 0.0
+            for d in deals:
                 if d.entry == 1:  # DEAL_ENTRY_OUT
-                    return float(d.price)
+                    exit_price = float(d.price)
+                    total_profit += float(d.profit)
+            if exit_price is not None:
+                return exit_price, total_profit
     except Exception as e:
-        logger.error(f"Error getting exit price for trade {trade.id}: {e}")
-    return None
+        logger.error(f"Error getting exit data for trade {trade.id}: {e}")
+    return None, 0.0
 
 
-def _record_close(session: Session, trade: Trade, exit_price: float):
+def _record_close(session: Session, trade: Trade, exit_price: float, actual_profit: float):
     """Record trade close — outcome, journal, notifications."""
-    result = _compute_result(trade, exit_price)
-    pnl_pips, pnl_dollars = _compute_pnl(trade, exit_price)
+    result = _compute_result(actual_profit)
+    pnl_pips, pnl_dollars = _compute_pnl(trade, exit_price, actual_profit)
     r_achieved = _compute_r_achieved(trade, exit_price)
 
     # Determine exit reason

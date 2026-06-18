@@ -664,7 +664,7 @@ def start_background_scheduler():
     scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
     scheduler.add_job(manage_open_trades, "interval", seconds=5, id="trade_manager")
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
-    scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle")
+    scheduler.add_job(run_scalping_cycle, "cron", minute="*/5", id="scalping_cycle")
     
     logger.info("🚀 Background Engine scheduler started inside FastAPI")
     scheduler.start()
@@ -692,7 +692,7 @@ def main():
     scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
     scheduler.add_job(manage_open_trades, "interval", seconds=5, id="trade_manager")
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
-    scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle")
+    scheduler.add_job(run_scalping_cycle, "cron", minute="*/5", id="scalping_cycle")
 
     logger.info("🚀 Engine scheduler started — running every 15 minutes")
     logger.info("   Press Ctrl+C to stop")

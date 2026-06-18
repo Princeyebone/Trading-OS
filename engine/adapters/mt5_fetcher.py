@@ -13,7 +13,7 @@ class MT5Fetcher(BaseDataFetcher):
     def __init__(self, default_symbol: str = "XAUUSD"):
         self.default_symbol = default_symbol
         self.bars_needed = {
-            "M5":  300,
+            "M5":  600,
             "M15": 200,
             "H1":  200,
             "H4":  200,
