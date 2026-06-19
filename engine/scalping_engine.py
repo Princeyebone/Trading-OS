@@ -530,7 +530,7 @@ class ScalpingEngine:
         self.m5_data = m5_data
         self.m15_data = m15_data
         
-    def scan(self, current_idx: int) -> list[dict]:
+    def scan(self, current_idx: int, h4_trend: str = "UNKNOWN") -> list[dict]:
         signals = []
         
         # 1. Breakout
@@ -626,3 +626,82 @@ class ScalpingEngine:
             if signals:
                 all_signals.extend(signals)
         return all_signals
+
+def detect_m1_ema_pullback_scalp(m1_data: pd.DataFrame, current_idx: int, h4_trend: str) -> tuple[str | None, dict | None]:
+    """
+    M1 Hyper-Scalper Logic:
+    Hunts for perfect pullbacks to the M1 EMA 20 during strong momentum trends.
+    """
+    if current_idx < 50:
+        return None, None
+        
+    current = m1_data.iloc[current_idx]
+    prev = m1_data.iloc[current_idx - 1]
+    current_price = float(current['close'])
+    
+    # 1. Calculate EMAs
+    ema20 = float(m1_data['close'].rolling(20).mean().iloc[current_idx])
+    ema50 = float(m1_data['close'].rolling(50).mean().iloc[current_idx])
+    
+    # 2. Distance to EMA20 must be extremely tight for M1 (< 0.5 points)
+    dist_to_ema20 = abs(current_price - ema20)
+    if dist_to_ema20 > 0.5:
+        return None, None
+        
+    # 3. Must be trending on M1
+    m1_trend_up = ema20 > ema50
+    m1_trend_down = ema20 < ema50
+    
+    # 4. Rejection candle (Wicks)
+    candle_range = float(current['high'] - current['low'])
+    if candle_range <= 0:
+        return None, None
+        
+    lower_wick = float(min(current['open'], current['close']) - current['low'])
+    upper_wick = float(current['high'] - max(current['open'], current['close']))
+    
+    bullish_rejection = (lower_wick / candle_range) > 0.4
+    bearish_rejection = (upper_wick / candle_range) > 0.4
+    
+    # ===== BULLISH M1 SCALP =====
+    if m1_trend_up and h4_trend == "BULLISH":
+        if bullish_rejection and current_price > float(prev['close']):
+            return 'BULLISH', {
+                'setup_type': 'M1_EMA_PULLBACK',
+                'level': round(ema20, 2),
+                'trend': 'UP'
+            }
+            
+    # ===== BEARISH M1 SCALP =====
+    if m1_trend_down and h4_trend == "BEARISH":
+        if bearish_rejection and current_price < float(prev['close']):
+            return 'BEARISH', {
+                'setup_type': 'M1_EMA_PULLBACK',
+                'level': round(ema20, 2),
+                'trend': 'DOWN'
+            }
+            
+    return None, None
+
+class M1HyperEngine:
+    def __init__(self, m1_data: pd.DataFrame, h4_trend: str):
+        self.m1_data = m1_data
+        self.h4_trend = h4_trend
+        
+    def scan(self, current_idx: int) -> list[dict]:
+        signals = []
+        
+        direction, details = detect_m1_ema_pullback_scalp(self.m1_data, current_idx, self.h4_trend)
+        if direction:
+            base_sig = {
+                'type': 'M1_EMA_PULLBACK',
+                'direction': direction,
+                'details': details,
+                'timestamp': self.m1_data.index[current_idx],
+                'price': float(self.m1_data['close'].iloc[current_idx]),
+                'timeframe': 'M1'
+            }
+            # execute_scalp_signal automatically applies adaptive SL/TP logic
+            signals.append(execute_scalp_signal(base_sig))
+            
+        return signals

@@ -21,15 +21,32 @@ def _send(message: str):
         safe_msg = message.encode('ascii', 'ignore').decode('ascii')
         logger.info(f"[TELEGRAM STUB] {safe_msg[:100]}...")
         return
-
     try:
-        from telegram import Bot
-        bot = Bot(token=BOT_TOKEN)
-        asyncio.run(bot.send_message(
-            chat_id=CHAT_ID,
-            text=message,
-            parse_mode="HTML",
-        ))
+        from engine.db import get_session
+        from app.models.config import EngineConfig
+        from sqlmodel import select
+        
+        session = get_session()
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        session.close()
+        
+        if config and not config.telegram_enabled:
+            logger.info("Telegram notification skipped (Disabled in frontend settings).")
+            return
+    except Exception as e:
+        logger.warning(f"Could not check DB config for telegram_enabled: {e}")
+    try:
+        import requests
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        # Use a short timeout so it doesn't block the engine thread if Telegram is down
+        response = requests.post(url, json=payload, timeout=5)
+        if response.status_code != 200:
+            logger.error(f"Telegram API Error: {response.status_code} - {response.text}")
     except Exception as e:
         logger.error(f"Telegram send error: {e}")
 

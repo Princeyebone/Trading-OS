@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import logging
 
 from engine.data_fetcher import fetch_ohlcv
-from engine.scalping_engine import ScalpingEngine
+from engine.scalping_engine import ScalpingEngine, M1HyperEngine
 from engine import broker_executor
 from app.models.signals import Signal
 from engine.db import get_session
@@ -17,29 +17,83 @@ class ScalpingIntegration:
         
     def scan_m5(self):
         """Scan M5 data for scalping setups."""
-        # Fetch M5 data (caching handled by data_fetcher if configured)
         m5_data = fetch_ohlcv("M5", use_cache=False)
         if m5_data is None or len(m5_data) < 100:
             logger.warning("Insufficient M5 data for scalping")
-            return []
+            return [], "UNKNOWN"
             
         m15_data = fetch_ohlcv("M15", use_cache=True)
-        if m15_data is None:
-            return []
+        m15_trend = "UNKNOWN"
+        if m15_data is not None and len(m15_data) >= 50:
+            import ta
+            close_series = m15_data['close'].astype(float)
+            ema20 = ta.trend.ema_indicator(close_series, window=20).iloc[-1]
+            ema50 = ta.trend.ema_indicator(close_series, window=50).iloc[-1]
+            if not pd.isna(ema20) and not pd.isna(ema50):
+                if ema20 > ema50: m15_trend = "BULLISH"
+                elif ema20 < ema50: m15_trend = "BEARISH"
+            
+        h4_data = fetch_ohlcv("H4", use_cache=True)
+        h4_trend = "UNKNOWN"
+        if h4_data is not None and len(h4_data) >= 50:
+            import ta
+            close_series = h4_data['close'].astype(float)
+            ema20 = ta.trend.ema_indicator(close_series, window=20).iloc[-1]
+            ema50 = ta.trend.ema_indicator(close_series, window=50).iloc[-1]
+            if not pd.isna(ema20) and not pd.isna(ema50):
+                if ema20 > ema50: h4_trend = "BULLISH"
+                elif ema20 < ema50: h4_trend = "BEARISH"
             
         # Run the scalping engine
         engine = ScalpingEngine(m5_data, m15_data)
         current_idx = len(m5_data) - 1  # Latest candle
         
-        new_signals = engine.scan(current_idx)
+        new_signals = engine.scan(current_idx, h4_trend=h4_trend)
         if not new_signals:
             c_price = m5_data['close'].iloc[current_idx]
-            logger.info(f"Scan complete: 0 setups found at price {c_price:.2f}. Waiting for criteria...")
-        return new_signals
+            logger.info(f"Scan M5 complete: 0 setups found at price {c_price:.2f}. Waiting for criteria...")
+        return new_signals, h4_trend, m15_trend
+        
+    def scan_m1(self):
+        """Scan M1 data for hyper-scalping setups."""
+        m1_data = fetch_ohlcv("M1", use_cache=False)
+        if m1_data is None or len(m1_data) < 100:
+            return [], "UNKNOWN", "UNKNOWN"
+            
+        m15_data = fetch_ohlcv("M15", use_cache=True)
+        m15_trend = "UNKNOWN"
+        if m15_data is not None and len(m15_data) >= 50:
+            import ta
+            close_series = m15_data['close'].astype(float)
+            ema20 = ta.trend.ema_indicator(close_series, window=20).iloc[-1]
+            ema50 = ta.trend.ema_indicator(close_series, window=50).iloc[-1]
+            if not pd.isna(ema20) and not pd.isna(ema50):
+                if ema20 > ema50: m15_trend = "BULLISH"
+                elif ema20 < ema50: m15_trend = "BEARISH"
+            
+        h4_data = fetch_ohlcv("H4", use_cache=True)
+        h4_trend = "UNKNOWN"
+        if h4_data is not None and len(h4_data) >= 50:
+            import ta
+            close_series = h4_data['close'].astype(float)
+            ema20 = ta.trend.ema_indicator(close_series, window=20).iloc[-1]
+            ema50 = ta.trend.ema_indicator(close_series, window=50).iloc[-1]
+            if not pd.isna(ema20) and not pd.isna(ema50):
+                if ema20 > ema50: h4_trend = "BULLISH"
+                elif ema20 < ema50: h4_trend = "BEARISH"
+                
+        engine = M1HyperEngine(m1_data, h4_trend)
+        current_idx = len(m1_data) - 1
+        
+        new_signals = engine.scan(current_idx)
+        if not new_signals:
+            c_price = m1_data['close'].iloc[current_idx]
+            logger.info(f"Scan M1 complete: 0 hyper-scalps found at price {c_price:.2f}. Monitoring...")
+        return new_signals, h4_trend, m15_trend
     
     def check_and_execute(self, config):
         """Check for new signals and execute them."""
-        new_signals = self.scan_m5()
+        new_signals, h4_trend, m15_trend = self.scan_m5()
         
         if not new_signals:
             return []
@@ -51,8 +105,19 @@ class ScalpingIntegration:
                 logger.info(f"Signal skipped: {signal.get('skip_reason')}")
                 continue
                 
+            # ── RELAXED TREND FILTER ──
+            # Signal must align with either the H4 Trend OR the M15 Trend
+            # DISABLED: The H4/M15 macro filters cause too much lag during V-shape reversals.
+            # if h4_trend != "UNKNOWN" and m15_trend != "UNKNOWN":
+            #     if signal['direction'] == 'BULLISH' and h4_trend == 'BEARISH' and m15_trend == 'BEARISH':
+            #         logger.info(f"Signal skipped: TREND_FILTER (Blocked LONG in BEARISH H4/M15 trend)")
+            #         continue
+            #     if signal['direction'] == 'BEARISH' and h4_trend == 'BULLISH' and m15_trend == 'BULLISH':
+            #         logger.info(f"Signal skipped: TREND_FILTER (Blocked SHORT in BULLISH H4/M15 trend)")
+            #         continue
+                
             # Check if this signal was already executed
-            if self._is_duplicate(signal):
+            if self._is_duplicate(signal, lockout_seconds=1800):
                 continue
             
             # Execute the trade
@@ -65,15 +130,51 @@ class ScalpingIntegration:
                 executed.append(signal)
         
         return executed
+        
+    def check_and_execute_m1(self, config):
+        """Check for new M1 signals and execute them."""
+        new_signals, h4_trend, m15_trend = self.scan_m1()
+        
+        if not new_signals:
+            return []
+            
+        executed = []
+        for signal in new_signals:
+            if signal.get('verdict') == 'WAIT':
+                logger.info(f"M1 Signal skipped: {signal.get('skip_reason')}")
+                continue
+                
+            # ── RELAXED TREND FILTER ──
+            # DISABLED: The H4/M15 macro filters cause too much lag during V-shape reversals.
+            # if h4_trend != "UNKNOWN" and m15_trend != "UNKNOWN":
+            #     if signal['direction'] == 'BULLISH' and h4_trend == 'BEARISH' and m15_trend == 'BEARISH':
+            #         logger.info(f"M1 Signal skipped: TREND_FILTER (Blocked LONG in BEARISH H4/M15 trend)")
+            #         continue
+            #     if signal['direction'] == 'BEARISH' and h4_trend == 'BULLISH' and m15_trend == 'BULLISH':
+            #         logger.info(f"M1 Signal skipped: TREND_FILTER (Blocked SHORT in BULLISH H4/M15 trend)")
+            #         continue
+                    
+            if self._is_duplicate(signal, lockout_seconds=900): # 15 min lockout for M1
+                continue
+                
+            trade_id, actual_entry, order_id = self._execute_signal(signal, config)
+            if trade_id:
+                signal['trade_id'] = trade_id
+                signal['actual_entry'] = actual_entry
+                signal['order_id'] = order_id
+                self.signals.append(signal)
+                executed.append(signal)
+                
+        return executed
     
-    def _is_duplicate(self, signal):
-        """Check if signal was already executed recently (last 30 minutes)."""
+    def _is_duplicate(self, signal, lockout_seconds=1800):
+        """Check if signal was already executed recently."""
         now = datetime.now(timezone.utc)
         for prev_signal in reversed(self.signals[-20:]):
             time_diff = (now - prev_signal['timestamp'].replace(tzinfo=timezone.utc)).total_seconds()
             
-            # Same type and within 30 minutes (1800 seconds)
-            if prev_signal['type'] == signal['type'] and time_diff < 1800:
+            # Same type and within lockout period
+            if prev_signal['type'] == signal['type'] and time_diff < lockout_seconds:
                 # Same direction
                 if prev_signal['direction'] == signal['direction']:
                     # Very close price
@@ -124,7 +225,7 @@ class ScalpingIntegration:
             
         # Log Signal
         db_sig = Signal(
-            timeframe="M5",
+            timeframe=signal.get('timeframe', 'M5'),
             session="SCALP",
             verdict="TRADE",
             direction=direction,

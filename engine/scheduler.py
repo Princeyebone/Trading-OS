@@ -407,21 +407,24 @@ def run_engine_cycle():
             return
 
         # ── H4 trend alignment gate ──
-        h4_align = snap.get("h4_alignment", "MIXED")
-        if direction == "LONG" and h4_align == "BEARISH":
-            logger.info("WAIT — LONG blocked by bearish H4 alignment")
-            signal.verdict = "WAIT"
-            signal.skip_reason = "H4_TREND_MISMATCH"
-            session.add(signal)
-            session.commit()
-            return
-        if direction == "SHORT" and h4_align == "BULLISH":
-            logger.info("WAIT — SHORT blocked by bullish H4 alignment")
-            signal.verdict = "WAIT"
-            signal.skip_reason = "H4_TREND_MISMATCH"
-            session.add(signal)
-            session.commit()
-            return
+        # h4_align = snap.get("h4_alignment", "MIXED")
+        # is_crown = "CROWN_MOMENTUM" in str(analysis)
+        
+        # DISABLED: The H4 macro filter causes too much lag during V-shape reversals.
+        # if direction == "LONG" and h4_align == "BEARISH" and not is_crown:
+        #     logger.info("WAIT — LONG blocked by bearish H4 alignment")
+        #     signal.verdict = "WAIT"
+        #     signal.skip_reason = "H4_TREND_MISMATCH"
+        #     session.add(signal)
+        #     session.commit()
+        #     return
+        # if direction == "SHORT" and h4_align == "BULLISH" and not is_crown:
+        #     logger.info("WAIT — SHORT blocked by bullish H4 alignment")
+        #     signal.verdict = "WAIT"
+        #     signal.skip_reason = "H4_TREND_MISMATCH"
+        #     session.add(signal)
+        #     session.commit()
+        #     return
 
         # ── Position sizing ──
         entry = analysis.get("entry") or snap.get("m15_close")
@@ -652,6 +655,34 @@ def run_scalping_cycle():
     finally:
         session.close()
 
+def run_m1_scalping_cycle():
+    """Runs every minute to check for M1 hyper-scalping signals."""
+    global DRY_RUN, _scalping_integration
+    
+    if DRY_RUN:
+        return
+        
+    if _scalping_integration is None:
+        _scalping_integration = ScalpingIntegration()
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _scalping_integration.check_and_execute_m1(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"M1 Scalp Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("M1 Hyper-Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"M1 Scalping cycle error: {e}")
+    finally:
+        session.close()
+
 
 # ─── Entry point ────────────────────────────────────────────────────────────────
 def start_background_scheduler():
@@ -664,7 +695,8 @@ def start_background_scheduler():
     scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
     scheduler.add_job(manage_open_trades, "interval", seconds=5, id="trade_manager")
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
-    scheduler.add_job(run_scalping_cycle, "cron", minute="*/5", id="scalping_cycle")
+    scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle", replace_existing=True)
+    scheduler.add_job(run_m1_scalping_cycle, "cron", minute="*", id="m1_scalping_cycle")
     
     logger.info("🚀 Background Engine scheduler started inside FastAPI")
     scheduler.start()
@@ -692,7 +724,8 @@ def main():
     scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
     scheduler.add_job(manage_open_trades, "interval", seconds=5, id="trade_manager")
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
-    scheduler.add_job(run_scalping_cycle, "cron", minute="*/5", id="scalping_cycle")
+    scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle", replace_existing=True)
+    scheduler.add_job(run_m1_scalping_cycle, "cron", minute="*", id="m1_scalping_cycle")
 
     logger.info("🚀 Engine scheduler started — running every 15 minutes")
     logger.info("   Press Ctrl+C to stop")

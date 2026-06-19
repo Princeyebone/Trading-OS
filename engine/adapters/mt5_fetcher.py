@@ -35,7 +35,9 @@ class MT5Fetcher(BaseDataFetcher):
         symbol = self._get_symbol()
 
         # Map string timeframe to MT5 constant
-        if timeframe == "M5":
+        if timeframe == "M1":
+            mt5_tf = mt5.TIMEFRAME_M1
+        elif timeframe == "M5":
             mt5_tf = mt5.TIMEFRAME_M5
         elif timeframe == "M15":
             mt5_tf = mt5.TIMEFRAME_M15
