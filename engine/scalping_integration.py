@@ -188,10 +188,10 @@ class ScalpingIntegration:
         # For Scalping, maybe halve the risk? Or use full risk. We will use half risk for scalps.
         risk_dollars = risk_dollars * 0.5 
         
-        pip_value_per_micro = 1.0   # $1 per pip per 0.10 lot
+        pip_value_per_standard = 10.0   # $10 per pip per 1.00 lot
         if stop_loss_pips <= 0:
             return 0.01
-        raw_lots = risk_dollars / (stop_loss_pips * pip_value_per_micro)
+        raw_lots = risk_dollars / (stop_loss_pips * pip_value_per_standard)
         return max(0.01, round(raw_lots - (raw_lots % 0.01), 2))
     
     def _execute_signal(self, signal, config):

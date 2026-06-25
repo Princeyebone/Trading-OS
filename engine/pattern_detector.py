@@ -76,6 +76,70 @@ def detect_order_blocks(df: pd.DataFrame, direction: str = "both") -> List[Dict]
 
     return blocks[:5]  # return top 5 most recent
 
+def detect_fvg_order_blocks(df: pd.DataFrame, direction: str = "both") -> List[Dict]:
+    """
+    Detect True SMC Order Blocks.
+    A valid OB must be followed by an impulse candle, and the subsequent 
+    confirming candle must leave a Fair Value Gap (FVG) of >= 0.5 points (5 pips).
+    """
+    blocks = []
+    n = len(df)
+    if n < OB_LOOKBACK + 3:
+        return blocks
+
+    closes = df["close"].values
+    opens  = df["open"].values
+    highs  = df["high"].values
+    lows   = df["low"].values
+
+    for i in range(2, min(n - 1, OB_LOOKBACK)):
+        idx = n - 1 - i  # scan from most recent backward
+        
+        c_confirm_idx = idx + 2
+        c_impulse_idx = idx + 1
+        c_ob_idx = idx
+        
+        if c_confirm_idx >= n:
+            continue
+
+        # Bullish FVG OB
+        # OB is bearish, impulse is bullish & engulfing
+        if opens[c_ob_idx] > closes[c_ob_idx] and closes[c_impulse_idx] > opens[c_impulse_idx] and closes[c_impulse_idx] > highs[c_ob_idx]:
+            # FVG Check: c_confirm's LOW must be higher than c_ob's HIGH
+            gap_size = lows[c_confirm_idx] - highs[c_ob_idx]
+            if gap_size >= 0.5: # 5 pips
+                if direction in ("both", "long"):
+                    blocks.append({
+                        "type": "ORDER_BLOCK",
+                        "direction": "BULLISH",
+                        "high": float(highs[c_ob_idx]),
+                        "low": float(lows[c_ob_idx]),
+                        "mid": float((highs[c_ob_idx] + lows[c_ob_idx]) / 2),
+                        "bar_index": int(c_ob_idx),
+                        "timestamp": str(df.index[c_ob_idx]),
+                        "confidence": 95,
+                    })
+                    
+        # Bearish FVG OB
+        # OB is bullish, impulse is bearish & engulfing
+        elif closes[c_ob_idx] > opens[c_ob_idx] and closes[c_impulse_idx] < opens[c_impulse_idx] and closes[c_impulse_idx] < lows[c_ob_idx]:
+            # FVG Check: c_confirm's HIGH must be lower than c_ob's LOW
+            gap_size = lows[c_ob_idx] - highs[c_confirm_idx]
+            if gap_size >= 0.5:
+                if direction in ("both", "short"):
+                    blocks.append({
+                        "type": "ORDER_BLOCK",
+                        "direction": "BEARISH",
+                        "high": float(highs[c_ob_idx]),
+                        "low": float(lows[c_ob_idx]),
+                        "mid": float((highs[c_ob_idx] + lows[c_ob_idx]) / 2),
+                        "bar_index": int(c_ob_idx),
+                        "timestamp": str(df.index[c_ob_idx]),
+                        "confidence": 95,
+                    })
+
+    return blocks[:5]
+
 
 def detect_fair_value_gaps(df: pd.DataFrame) -> List[Dict]:
     """

@@ -32,7 +32,7 @@ def manage_open_trades():
     session = get_session()
     try:
         # Use FOR UPDATE to lock rows and prevent scheduler conflicts
-        open_trades = session.exec(select(Trade).where(Trade.status == "OPEN").with_for_update()).all()
+        open_trades = session.exec(select(Trade).where(Trade.status.in_(["OPEN", "PENDING"])).with_for_update()).all()
         if not open_trades:
             return
 
@@ -59,6 +59,158 @@ def manage_open_trades():
             # Fetch MT5 position to ensure it's still open
             mt5_pos = mt5.positions_get(ticket=ticket)
             if not mt5_pos:
+                # If it's a pending trade, check if the limit order is still sitting there
+                if trade.status == "PENDING":
+                    mt5_order = mt5.orders_get(ticket=ticket)
+                    if mt5_order:
+                        order_price = mt5_order[0].price_open
+                        magic = mt5_order[0].magic
+                        current_price = live_ask if trade.direction == "LONG" else live_bid
+                        dist_pips = abs(current_price - order_price) * 10.0
+                        if magic == 202603:
+                            logger.info(f"⏳ [M5 Runner Monitor] Trade #{trade.id} PENDING Limit Order: {dist_pips:.1f} pts away from 50% Pullback ({order_price:.2f})")
+                        elif magic == 202604:
+                            logger.info(f"⏳ [M15 Momentum Monitor] Trade #{trade.id} PENDING Limit Order: {dist_pips:.1f} pts away from 50% Pullback ({order_price:.2f})")
+                        else:
+                            logger.info(f"⏳ [M15 FVG Sniper Monitor] Trade #{trade.id} PENDING Limit Order: {dist_pips:.1f} pts away from entry ({order_price:.2f})")
+                    else:
+                        # Order is gone and not a position (cancelled or expired)
+                        trade.status = "CANCELLED"
+                        session.add(trade)
+                        session.commit()
+                continue
+                
+            if trade.status == "PENDING":
+                trade.status = "OPEN"
+                session.add(trade)
+                session.commit()
+                logger.info(f"🟢 Pending trade #{trade.id} has been FILLED and is now OPEN!")
+                
+            # Skip tight ratcheting TP for Macro Swing trades
+            if mt5_pos[0].magic == 202601:
+                continue
+                
+            # M15 FVG Sniper Trailing Logic (Magic 202602)
+            if mt5_pos[0].magic == 202602:
+                # Use a 30-pip trailing stop for more consistent payouts
+                MOMENTUM_TRAIL_PIPS = 30.0
+                
+                # Calculate live profit in pips
+                if trade.direction == "LONG":
+                    profit_pips = (live_bid - entry) * 10
+                else:
+                    profit_pips = (entry - live_ask) * 10
+                    
+                dirty = False
+                if profit_pips > trade.highest_profit_pips:
+                    trade.highest_profit_pips = profit_pips
+                    dirty = True
+                    
+                # New trailing stop level (highest profit - 30 pips)
+                if trade.highest_profit_pips >= MOMENTUM_TRAIL_PIPS:
+                    locked_pips = trade.highest_profit_pips - MOMENTUM_TRAIL_PIPS
+                    if locked_pips > trade.locked_profit_pips:
+                        trade.locked_profit_pips = locked_pips
+                        dirty = True
+                        
+                        # Move SL natively
+                        new_sl = entry + (locked_pips / 10.0) if trade.direction == "LONG" else entry - (locked_pips / 10.0)
+                        broker_executor.modify_position_sl(ticket, new_sl)
+                        logger.info(f"🚀 FVG Sniper Trailing SL moved to +{locked_pips:.1f} pips")
+                
+                # Hard close if it reverses past the lock
+                if trade.locked_profit_pips > 0 and profit_pips <= trade.locked_profit_pips:
+                    logger.info(f"🎯 FVG Sniper Trailing Stop HIT! Closing at +{trade.locked_profit_pips:.1f} pips.")
+                    broker_executor.close_position(ticket)
+                    dirty = True
+                    
+                if dirty:
+                    session.add(trade)
+                    session.commit()
+                    
+                logger.info(f"📈 [M15 FVG Sniper Monitor] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 30 pips)")
+                continue
+
+            # M5 Momentum Runner Trailing Logic (Magic 202603)
+            if mt5_pos[0].magic == 202603:
+                # Use a tighter 20-pip trailing stop for the M5 timeframe
+                M5_TRAIL_PIPS = 20.0
+                
+                # Calculate live profit in pips
+                if trade.direction == "LONG":
+                    profit_pips = (live_bid - entry) * 10
+                else:
+                    profit_pips = (entry - live_ask) * 10
+                    
+                dirty = False
+                if profit_pips > trade.highest_profit_pips:
+                    trade.highest_profit_pips = profit_pips
+                    dirty = True
+                    
+                # New trailing stop level (highest profit - 20 pips)
+                if trade.highest_profit_pips >= M5_TRAIL_PIPS:
+                    locked_pips = trade.highest_profit_pips - M5_TRAIL_PIPS
+                    if locked_pips > trade.locked_profit_pips:
+                        trade.locked_profit_pips = locked_pips
+                        dirty = True
+                        
+                        # Move SL natively
+                        new_sl = entry + (locked_pips / 10.0) if trade.direction == "LONG" else entry - (locked_pips / 10.0)
+                        broker_executor.modify_position_sl(ticket, new_sl)
+                        logger.info(f"🚀 M5 Runner Trailing SL moved to +{locked_pips:.1f} pips")
+                
+                # Hard close if it reverses past the lock
+                if trade.locked_profit_pips > 0 and profit_pips <= trade.locked_profit_pips:
+                    logger.info(f"🎯 M5 Runner Trailing Stop HIT! Closing at +{trade.locked_profit_pips:.1f} pips.")
+                    broker_executor.close_position(ticket)
+                    dirty = True
+                    
+                if dirty:
+                    session.add(trade)
+                    session.commit()
+                    
+                logger.info(f"📈 [M5 Runner Monitor] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 20 pips)")
+                continue
+
+            # M15 Momentum Sibling Trailing Logic (Magic 202604)
+            if mt5_pos[0].magic == 202604:
+                # Use a tighter 30-pip trailing stop for the M15 timeframe
+                M15_TRAIL_PIPS = 30.0
+                
+                # Calculate live profit in pips
+                if trade.direction == "LONG":
+                    profit_pips = (live_bid - entry) * 10
+                else:
+                    profit_pips = (entry - live_ask) * 10
+                    
+                dirty = False
+                if profit_pips > trade.highest_profit_pips:
+                    trade.highest_profit_pips = profit_pips
+                    dirty = True
+                    
+                # New trailing stop level (highest profit - 30 pips)
+                if trade.highest_profit_pips >= M15_TRAIL_PIPS:
+                    locked_pips = trade.highest_profit_pips - M15_TRAIL_PIPS
+                    if locked_pips > trade.locked_profit_pips:
+                        trade.locked_profit_pips = locked_pips
+                        dirty = True
+                        
+                        # Move SL natively
+                        new_sl = entry + (locked_pips / 10.0) if trade.direction == "LONG" else entry - (locked_pips / 10.0)
+                        broker_executor.modify_position_sl(ticket, new_sl)
+                        logger.info(f"🚀 M15 Momentum Sibling Trailing SL moved to +{locked_pips:.1f} pips")
+                
+                # Hard close if it reverses past the lock
+                if trade.locked_profit_pips > 0 and profit_pips <= trade.locked_profit_pips:
+                    logger.info(f"🎯 M15 Momentum Sibling Trailing Stop HIT! Closing at +{trade.locked_profit_pips:.1f} pips.")
+                    broker_executor.close_position(ticket)
+                    dirty = True
+                    
+                if dirty:
+                    session.add(trade)
+                    session.commit()
+                    
+                logger.info(f"📈 [M15 Momentum Monitor] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 30 pips)")
                 continue
                 
             # Determine Lock Configuration based on Signal
@@ -85,7 +237,7 @@ def manage_open_trades():
                 profit_pips = (entry - live_ask) * 10
                 
             trade_type = "SCALP" if step_gain_pips == 10.0 else "TCP"
-            logger.info(f"📊 [Step TP Monitor] Trade #{trade.id} ({trade_type}): Current Profit = {profit_pips/10.0:.2f} pts | Locked = {trade.locked_profit_pips/10.0:.2f} pts")
+            logger.info(f"📊 [Step TP Monitor] Trade #{trade.id} ({trade_type}): ACTIVE: PnL {profit_pips:+.1f} pips | Locked = {trade.locked_profit_pips:.1f} pips")
                 
             # Update highest profit
             dirty = False

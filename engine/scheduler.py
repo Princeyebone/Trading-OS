@@ -23,7 +23,7 @@ from sqlmodel import Session, select
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.db import get_session, is_db_alive
-from engine import data_fetcher, indicators, pattern_detector, claude_analyst, qwen_analyst, broker_executor, telegram_notifier
+from engine import data_fetcher, indicators, pattern_detector, claude_analyst, qwen_analyst, broker_executor, telegram_notifier, momentum_runner, m5_momentum_runner, m15_momentum_runner
 from engine.rule_engine import evaluate_all as rule_engine_evaluate
 from engine.news_guard import is_news_blackout
 from engine.outcome_monitor import check_and_close_trades
@@ -127,10 +127,10 @@ def compute_lot_size(config: EngineConfig, stop_loss_pips: float) -> float:
     Gold: 1 pip = $0.10 per micro lot (0.01 lots)
     """
     risk_dollars = config.account_balance_equiv * (config.max_risk_percent / 100)
-    pip_value_per_micro = 1.0   # $1 per pip per 0.10 lot
+    pip_value_per_standard = 10.0   # $10 per pip per 1.00 lot
     if stop_loss_pips <= 0:
         return 0.01
-    raw_lots = risk_dollars / (stop_loss_pips * pip_value_per_micro)
+    raw_lots = risk_dollars / (stop_loss_pips * pip_value_per_standard)
     # Round down to nearest 0.01
     return max(0.01, round(raw_lots - (raw_lots % 0.01), 2))
 
@@ -697,6 +697,9 @@ def start_background_scheduler():
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
     scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle", replace_existing=True)
     scheduler.add_job(run_m1_scalping_cycle, "cron", minute="*", id="m1_scalping_cycle")
+    scheduler.add_job(momentum_runner.run_momentum_cycle, "cron", minute="0,15,30,45", id="momentum_runner_cycle")
+    scheduler.add_job(m5_momentum_runner.run_m5_momentum_cycle, "cron", minute="*/5", id="m5_momentum_runner_cycle")
+    scheduler.add_job(m15_momentum_runner.run_m15_momentum_cycle, "cron", minute="0,15,30,45", id="m15_momentum_runner_cycle")
     
     logger.info("🚀 Background Engine scheduler started inside FastAPI")
     scheduler.start()
@@ -726,6 +729,9 @@ def main():
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
     scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle", replace_existing=True)
     scheduler.add_job(run_m1_scalping_cycle, "cron", minute="*", id="m1_scalping_cycle")
+    scheduler.add_job(momentum_runner.run_momentum_cycle, "cron", minute="0,15,30,45", id="momentum_runner_cycle")
+    scheduler.add_job(m5_momentum_runner.run_m5_momentum_cycle, "cron", minute="*/5", id="m5_momentum_runner_cycle")
+    scheduler.add_job(m15_momentum_runner.run_m15_momentum_cycle, "cron", minute="0,15,30,45", id="m15_momentum_runner_cycle")
 
     logger.info("🚀 Engine scheduler started — running every 15 minutes")
     logger.info("   Press Ctrl+C to stop")

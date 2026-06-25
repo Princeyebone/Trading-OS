@@ -17,6 +17,7 @@ class MT5Fetcher(BaseDataFetcher):
             "M15": 200,
             "H1":  200,
             "H4":  200,
+            "D1":  200,
         }
 
     def _get_symbol(self) -> str:
@@ -45,6 +46,8 @@ class MT5Fetcher(BaseDataFetcher):
             mt5_tf = mt5.TIMEFRAME_H1
         elif timeframe == "H4":
             mt5_tf = mt5.TIMEFRAME_H4
+        elif timeframe == "D1":
+            mt5_tf = mt5.TIMEFRAME_D1
         else:
             logger.error(f"Unknown timeframe for MT5: {timeframe}")
             return None

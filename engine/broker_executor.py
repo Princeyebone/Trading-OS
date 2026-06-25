@@ -85,9 +85,9 @@ def place_order(
             "symbol": SYMBOL,
             "volume": lot_size,
             "type": order_type,
-            "price": price,
-            "sl": stop_loss,
-            "tp": take_profit,
+            "price": round(price, 2),
+            "sl": round(stop_loss, 2) if stop_loss > 0 else 0.0,
+            "tp": round(take_profit, 2) if take_profit > 0 else 0.0,
             "deviation": 20,
             "magic": 202600,
             "comment": comment,
@@ -120,6 +120,59 @@ def place_order(
     except Exception as e:
         logger.error(f"place_order exception: {e}")
         return {"success": False, "error": str(e), "order_id": None, "actual_entry": None, "slippage_pips": None}
+
+def place_limit_order(
+    direction: str,
+    lot_size: float,
+    entry_price: float,
+    stop_loss: float,
+    take_profit: float,
+    magic: int = 202600,
+    comment: str = "TradingOS"
+) -> dict:
+    """Place a pending Limit Order."""
+    if STUB_MODE:
+        logger.info(f"[STUB] Would place LIMIT {direction} {lot_size} lots @ {entry_price} SL={stop_loss} TP={take_profit}")
+        return {"success": True, "order_id": f"STUB-LMT-{int(__import__('time').time())}", "error": None}
+        
+    try:
+        import MetaTrader5 as mt5
+        if not _init_mt5():
+            return {"success": False, "error": "MT5 not connected", "order_id": None}
+            
+        action = mt5.TRADE_ACTION_PENDING
+        order_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == "LONG" else mt5.ORDER_TYPE_SELL_LIMIT
+        
+        request = {
+            "action": action,
+            "symbol": SYMBOL,
+            "volume": lot_size,
+            "type": order_type,
+            "price": round(entry_price, 2),
+            "sl": round(stop_loss, 2) if stop_loss > 0 else 0.0,
+            "tp": round(take_profit, 2) if take_profit > 0 else 0.0,
+            "deviation": 20,
+            "magic": magic,
+            "comment": comment,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        result = mt5.order_send(request)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            error_msg = f"Limit Order failed: retcode={result.retcode if result else 'None'} ({result.comment if result else ''})"
+            logger.error(error_msg)
+            return {"success": False, "error": error_msg, "order_id": None}
+            
+        logger.info(f"Limit Order placed: #{result.order} {direction} {lot_size} lots @ {entry_price}")
+        return {
+            "success": True,
+            "order_id": str(result.order),
+            "error": None
+        }
+    except Exception as e:
+        logger.error(f"place_limit_order exception: {e}")
+        return {"success": False, "error": str(e), "order_id": None}
 
 
 def get_open_positions() -> list:
@@ -219,13 +272,13 @@ def modify_position_sl(ticket: int, new_sl: float) -> bool:
             "action": mt5.TRADE_ACTION_SLTP,
             "position": ticket,
             "symbol": SYMBOL,
-            "sl": new_sl,
+            "sl": round(new_sl, 2),
             "tp": pos.tp,
             "magic": 202600
         }
         result = mt5.order_send(request)
         if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-            logger.info(f"Modified SL for #{ticket} to {new_sl}")
+            logger.info(f"Modified SL for #{ticket} to {round(new_sl, 2):.2f}")
             return True
         else:
             logger.error(f"Failed to modify SL for #{ticket}: {result.comment if result else 'Unknown'}")
@@ -347,9 +400,9 @@ def place_straddle_orders(
             "symbol": SYMBOL,
             "volume": lot_size,
             "type": mt5.ORDER_TYPE_BUY_STOP,
-            "price": buy_stop_price,
-            "sl": buy_stop_price - sl_dist,
-            "tp": buy_stop_price + tp1_dist,
+            "price": round(buy_stop_price, 2),
+            "sl": round(buy_stop_price - sl_dist, 2),
+            "tp": round(buy_stop_price + tp1_dist, 2),
             "deviation": 20,
             "magic": 202600,
             "comment": "ABE-BuyStop",
@@ -363,9 +416,9 @@ def place_straddle_orders(
             "symbol": SYMBOL,
             "volume": lot_size,
             "type": mt5.ORDER_TYPE_SELL_STOP,
-            "price": sell_stop_price,
-            "sl": sell_stop_price + sl_dist,
-            "tp": sell_stop_price - tp1_dist,
+            "price": round(sell_stop_price, 2),
+            "sl": round(sell_stop_price + sl_dist, 2),
+            "tp": round(sell_stop_price - tp1_dist, 2),
             "deviation": 20,
             "magic": 202600,
             "comment": "ABE-SellStop",
