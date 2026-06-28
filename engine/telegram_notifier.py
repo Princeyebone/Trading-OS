@@ -15,8 +15,25 @@ CHAT_ID   = settings.telegram_chat_id
 STUB_MODE = settings.telegram_stub_mode
 
 
+def _sync_send(message: str):
+    """Synchronous worker to send the actual request."""
+    try:
+        import requests
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        # Use a short timeout so it doesn't hang
+        response = requests.post(url, json=payload, timeout=5)
+        if response.status_code != 200:
+            logger.error(f"Telegram API Error: {response.status_code} - {response.text}")
+    except Exception as e:
+        logger.error(f"Telegram send error: {e}")
+
 def _send(message: str):
-    """Send a Telegram message synchronously."""
+    """Send a Telegram message asynchronously via a background thread."""
     if STUB_MODE or not BOT_TOKEN or not CHAT_ID:
         safe_msg = message.encode('ascii', 'ignore').decode('ascii')
         logger.info(f"[TELEGRAM STUB] {safe_msg[:100]}...")
@@ -35,20 +52,10 @@ def _send(message: str):
             return
     except Exception as e:
         logger.warning(f"Could not check DB config for telegram_enabled: {e}")
-    try:
-        import requests
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML"
-        }
-        # Use a short timeout so it doesn't block the engine thread if Telegram is down
-        response = requests.post(url, json=payload, timeout=5)
-        if response.status_code != 200:
-            logger.error(f"Telegram API Error: {response.status_code} - {response.text}")
-    except Exception as e:
-        logger.error(f"Telegram send error: {e}")
+        
+    import threading
+    t = threading.Thread(target=_sync_send, args=(message,), daemon=True)
+    t.start()
 
 
 def notify_trade_executed(
@@ -82,17 +89,20 @@ def notify_trade_outcome(
     exit_price: float,
     result: str,          # WIN, LOSS, BE
     pnl_dollars: float,
+    pnl_pips: float,
     r_achieved: float,
     exit_reason: str,
     duration_mins: int,
+    ticket: str = None,
 ):
     emoji = "✅" if result == "WIN" else ("❌" if result == "LOSS" else "⚖️")
     pnl_sign = "+" if pnl_dollars >= 0 else ""
+    ticket_str = f" (Ticket #{ticket})" if ticket else ""
     msg = (
         f"{emoji} <b>TRADE CLOSED — {result}</b>\n"
-        f"{'🔼 LONG' if direction == 'LONG' else '🔽 SHORT'} XAU/USD\n\n"
-        f"📍 Entry:    {entry} → {exit_price}\n"
-        f"💰 P&L:     <b>{pnl_sign}{pnl_dollars:.2f}</b>\n"
+        f"{'🔼 LONG' if direction == 'LONG' else '🔽 SHORT'} XAU/USD{ticket_str}\n\n"
+        f"📍 Entry:    <b>{entry:.2f} → {exit_price:.2f}</b>\n"
+        f"💰 P&L:     <b>{pnl_sign}${abs(pnl_dollars):.2f} ({pnl_sign}{abs(pnl_pips):.1f} pips)</b>\n"
         f"📊 R:       <b>{r_achieved:.2f}R</b>\n"
         f"🔚 Reason:  {exit_reason}\n"
         f"⏱ Duration: {duration_mins} min"

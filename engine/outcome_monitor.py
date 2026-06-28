@@ -150,13 +150,19 @@ def _record_close(session: Session, trade: Trade, exit_price: float, actual_prof
         else:
             exit_reason = "SL_HIT"
 
-    closed_at = datetime.now(timezone.utc)
-    opened_at_aware = trade.opened_at.replace(tzinfo=timezone.utc) if trade.opened_at.tzinfo is None else trade.opened_at
-    duration_mins = int((closed_at - opened_at_aware).total_seconds() / 60)
+    if trade.opened_at.tzinfo is None:
+        # Postgres SQLAlchemy strips timezone and converts to local time if column is naive
+        closed_at = datetime.now()
+        duration_mins = int((closed_at - trade.opened_at).total_seconds() / 60)
+        closed_at_utc = datetime.now(timezone.utc)
+    else:
+        closed_at = datetime.now(timezone.utc)
+        duration_mins = int((closed_at - trade.opened_at).total_seconds() / 60)
+        closed_at_utc = closed_at
 
     # Update trade record
     trade.status = result
-    trade.closed_at = closed_at
+    trade.closed_at = closed_at_utc
     session.add(trade)
 
     # Create outcome record
@@ -168,7 +174,7 @@ def _record_close(session: Session, trade: Trade, exit_price: float, actual_prof
         pnl_dollars=pnl_dollars,
         r_achieved=r_achieved,
         duration_mins=duration_mins,
-        closed_at=closed_at,
+        closed_at=closed_at_utc,
     )
     session.add(outcome)
 
@@ -194,9 +200,11 @@ def _record_close(session: Session, trade: Trade, exit_price: float, actual_prof
         exit_price=exit_price,
         result=result,
         pnl_dollars=pnl_dollars,
+        pnl_pips=pnl_pips,
         r_achieved=r_achieved,
         exit_reason=exit_reason,
         duration_mins=duration_mins,
+        ticket=trade.broker_order_id,
     )
 
     logger.info(f"Trade {trade.id} closed: {result} | R={r_achieved} | P&L=${pnl_dollars}")

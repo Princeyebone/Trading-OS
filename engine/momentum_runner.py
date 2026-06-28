@@ -79,6 +79,26 @@ def run_momentum_cycle():
     # 4. Check for existing pending orders to avoid duplicates
     session = get_session()
     try:
+        from sqlmodel import select
+        
+        limit_price = ob_high if is_bullish_trend else ob_low
+        
+        # Prevent revenge trading: check if we ALREADY took this exact setup recently
+        recent_trades = session.exec(
+            select(Trade)
+            .where(Trade.direction == ("LONG" if is_bullish_trend else "SHORT"))
+            .order_by(Trade.id.desc())
+            .limit(10)
+        ).all()
+        
+        now = datetime.now(timezone.utc)
+        for t in recent_trades:
+            trade_time = t.opened_at.replace(tzinfo=timezone.utc) if t.opened_at.tzinfo is None else t.opened_at
+            if (now - trade_time).total_seconds() < 3600: # 1 hour cooldown for exact same setup
+                if abs(t.planned_entry - limit_price) < 2.0:
+                    logger.info("⏭️ [M15 FVG Sniper] We already traded this exact setup recently. Skipping to avoid duplicate/revenge trading.")
+                    return
+
         # Check active trades with this magic number
         active_runner_trades = session.query(Trade).filter(
             Trade.status.in_(["OPEN", "PENDING"])
@@ -116,13 +136,7 @@ def run_momentum_cycle():
         else:
             sl_price = limit_price + (sl_dist_pips / 10.0)
             tp_price = limit_price - 5.0 # 50-pip TP
-        from app.models.config import EngineConfig
-        config = session.query(EngineConfig).filter(EngineConfig.is_active == True).first()
-        if not config: config = EngineConfig()
-        
-        risk_dollars = config.account_balance_equiv * (config.max_risk_percent / 100)
-        raw_lots = risk_dollars / (sl_dist_pips * 10.0)
-        lot_size = max(0.01, round(raw_lots - (raw_lots % 0.01), 2))
+        lot_size = 0.05
             
         logger.info(f"✅ [M15 FVG Sniper] Placing {direction_filter.upper()} Limit Order at {limit_price:.2f} | SL: {sl_price:.2f} | Lots: {lot_size}")
         

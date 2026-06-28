@@ -170,29 +170,51 @@ class ScalpingIntegration:
     def _is_duplicate(self, signal, lockout_seconds=1800):
         """Check if signal was already executed recently."""
         now = datetime.now(timezone.utc)
+        
+        # Check in-memory first (fast)
         for prev_signal in reversed(self.signals[-20:]):
             time_diff = (now - prev_signal['timestamp'].replace(tzinfo=timezone.utc)).total_seconds()
-            
-            # Same type and within lockout period
             if prev_signal['type'] == signal['type'] and time_diff < lockout_seconds:
-                # Same direction
                 if prev_signal['direction'] == signal['direction']:
-                    # Very close price
-                    if abs(prev_signal['price'] - signal['price']) < 2.0:
+                    if abs(prev_signal['entry'] - signal['entry']) < 2.0:
                         return True
+                        
+        # Check database (persistent across Uvicorn reloads)
+        try:
+            from app.database import get_session
+            from app.models.trades import Trade
+            from app.models.signals import Signal
+            from sqlmodel import select
+            
+            session = get_session()
+            recent_trades = session.exec(
+                select(Trade, Signal)
+                .join(Signal, Trade.signal_id == Signal.id)
+                .where(Trade.direction == ("LONG" if signal['direction'] == 'BULLISH' else "SHORT"))
+                .order_by(Trade.id.desc())
+                .limit(5)
+            ).all()
+            session.close()
+            
+            for t, s in recent_trades:
+                # If trade was opened within the lockout period
+                if t.opened_at.tzinfo is None:
+                    trade_time = t.opened_at.replace(tzinfo=timezone.utc) # fallback
+                else:
+                    trade_time = t.opened_at
+                    
+                if (now - trade_time).total_seconds() < lockout_seconds:
+                    if abs(t.planned_entry - signal['entry']) < 2.0:
+                        logger.info(f"DB Duplicate detected: {signal['direction']} @ {signal['entry']}")
+                        return True
+        except Exception as e:
+            logger.warning(f"Failed to check DB for duplicates: {e}")
+            
         return False
     
     def compute_lot_size(self, config, stop_loss_pips: float) -> float:
         """Calculate lot size using the engine configuration."""
-        risk_dollars = config.account_balance_equiv * (config.max_risk_percent / 100)
-        # For Scalping, maybe halve the risk? Or use full risk. We will use half risk for scalps.
-        risk_dollars = risk_dollars * 0.5 
-        
-        pip_value_per_standard = 10.0   # $10 per pip per 1.00 lot
-        if stop_loss_pips <= 0:
-            return 0.01
-        raw_lots = risk_dollars / (stop_loss_pips * pip_value_per_standard)
-        return max(0.01, round(raw_lots - (raw_lots % 0.01), 2))
+        return 0.05
     
     def _execute_signal(self, signal, config):
         """Execute a scalping trade."""

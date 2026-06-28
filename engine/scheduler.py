@@ -30,6 +30,10 @@ from engine.outcome_monitor import check_and_close_trades
 from engine.trade_manager import manage_open_trades
 from engine.market_tape_monitor import detect_tape_events
 from engine.scalping_integration import ScalpingIntegration
+# ── Gold Implementation 2 (Parallel Research Portfolio) ──────────────────────
+from engine import gi2_candle_pullback, gi2_asian_short, gi2_prelondon_long
+from engine import gi3_eurusd, gi3_gold, gi2_silver, eusdi1_core, xagi1_core, xagi2_core
+# ─────────────────────────────────────────────────────────────────────────────
 from app.models.signals import Signal, MarketContext, PatternEvent
 from app.models.trades import Trade, TradeJournal, StraddlePair
 from app.models.tape import TapeEvent
@@ -123,16 +127,9 @@ def run_preflight(session: Session, config: EngineConfig) -> tuple[bool, str]:
 # ─── Position sizing ────────────────────────────────────────────────────────────
 def compute_lot_size(config: EngineConfig, stop_loss_pips: float) -> float:
     """
-    Lot Size = (Balance × Risk%) / (SL pips × pip_value_per_micro_lot)
-    Gold: 1 pip = $0.10 per micro lot (0.01 lots)
+    Hardcoded lot size as requested by the user.
     """
-    risk_dollars = config.account_balance_equiv * (config.max_risk_percent / 100)
-    pip_value_per_standard = 10.0   # $10 per pip per 1.00 lot
-    if stop_loss_pips <= 0:
-        return 0.01
-    raw_lots = risk_dollars / (stop_loss_pips * pip_value_per_standard)
-    # Round down to nearest 0.01
-    return max(0.01, round(raw_lots - (raw_lots % 0.01), 2))
+    return 0.05
 
 
 # ─── Log signal to DB ──────────────────────────────────────────────────────────
@@ -693,15 +690,45 @@ def start_background_scheduler():
     # Fire exactly at minute 0, 15, 30, 45 (candle close)
     scheduler.add_job(run_engine_cycle, "cron", minute="0,15,30,45", id="engine_cycle")
     scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
-    scheduler.add_job(manage_open_trades, "interval", seconds=5, id="trade_manager")
+    scheduler.add_job(manage_open_trades, "interval", seconds=1, id="trade_manager")
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
     scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle", replace_existing=True)
     scheduler.add_job(run_m1_scalping_cycle, "cron", minute="*", id="m1_scalping_cycle")
     scheduler.add_job(momentum_runner.run_momentum_cycle, "cron", minute="0,15,30,45", id="momentum_runner_cycle")
     scheduler.add_job(m5_momentum_runner.run_m5_momentum_cycle, "cron", minute="*/5", id="m5_momentum_runner_cycle")
     scheduler.add_job(m15_momentum_runner.run_m15_momentum_cycle, "cron", minute="0,15,30,45", id="m15_momentum_runner_cycle")
+
+    # ── Gold Implementation 2 (Parallel Research Portfolio) ──
+    # Strategy 1: 2-Candle EMA Pullback — every 5 minutes
+    scheduler.add_job(gi2_candle_pullback.run_gi2_candle_pullback_cycle, "cron", minute="*/5", id="gi2_candle_pullback")
+    # Strategy 2: Asian Short — Entry at 04:00 GMT, Exit at 06:00 GMT
+    scheduler.add_job(gi2_asian_short.run_gi2_asian_short_entry, "cron", hour="4", minute="0", timezone="UTC", id="gi2_asian_short_entry")
+    scheduler.add_job(gi2_asian_short.run_gi2_asian_short_exit,  "cron", hour="6", minute="0", timezone="UTC", id="gi2_asian_short_exit")
+    # Strategy 3: Pre-London Long — Entry at 01:00 GMT, Exit at 04:00 GMT
+    scheduler.add_job(gi2_prelondon_long.run_gi2_prelondon_long_entry, "cron", hour="1", minute="0", timezone="UTC", id="gi2_prelondon_long_entry")
+    scheduler.add_job(gi2_prelondon_long.run_gi2_prelondon_long_exit,  "cron", hour="4", minute="0", timezone="UTC", id="gi2_prelondon_long_exit")
+    # ── Gold Implementation 3 (GI3) ──────────────────────────────────────────
+    scheduler.add_job(gi3_gold.run_vwap_reversion_cycle, "cron", minute="*/5", id="gi3_gold_vwap")
+    scheduler.add_job(gi3_gold.run_rsi_divergence_cycle, "cron", minute="0,15,30,45", id="gi3_gold_rsi")
+
+    # ── EUSDI1: EURUSD Strategies ────────────────────────────────────────────────
+    # Strategy: Daily Range Breakout (PDH/PDL Sweep)
+    scheduler.add_job(eusdi1_core.run_daily_breakout, "cron", minute="*/5", id="eusdi1_breakout")
+    # ── XAGI1: XAGUSD (Silver) Strategies ───────────────────────────────────────
+    # Strategy: MACD Zero Cross Stop & Reverse Runner (Hourly)
+    scheduler.add_job(xagi1_core.run_macd_trend, "cron", minute="0", id="xagi1_macd_trend")
+    # Strategy: EMA 9/21 Stop & Reverse Runner (Hourly)
+    scheduler.add_job(xagi2_core.run_ema_trend, "cron", minute="0", id="xagi2_ema_trend")
+    # ── GI2: XAGUSD (Silver) Strategies ───────────────────────────────────────
+    # [DISABLED] Silver is too highly trending for mean-reversion; removing to protect account
+    # scheduler.add_job(gi2_silver.run_silver_a_entry, "cron", hour="4",  minute="0", timezone="UTC", id="gi2_xag_a_entry")
+    # scheduler.add_job(gi2_silver.run_silver_a_exit,  "cron", hour="6",  minute="0", timezone="UTC", id="gi2_xag_a_exit")
+    # scheduler.add_job(gi2_silver.run_silver_b_entry, "cron", hour="13", minute="0", timezone="UTC", id="gi2_xag_b_entry")
+    # scheduler.add_job(gi2_silver.run_silver_b_exit,  "cron", hour="17", minute="0", timezone="UTC", id="gi2_xag_b_exit")
+    # scheduler.add_job(gi2_silver.run_silver_bb_cycle, "cron", minute="*/5", id="gi2_xag_bb")
+    # ─────────────────────────────────────────────────────────
     
-    logger.info("🚀 Background Engine scheduler started inside FastAPI")
+    logger.info("Background Engine scheduler started inside FastAPI")
     scheduler.start()
     return scheduler
 
@@ -725,13 +752,44 @@ def main():
     scheduler = BlockingScheduler(timezone="America/New_York")
     scheduler.add_job(run_engine_cycle, "cron", minute="0,15,30,45", id="engine_cycle")
     scheduler.add_job(check_and_close_trades, "cron", minute="*/5", id="outcome_monitor")
-    scheduler.add_job(manage_open_trades, "interval", seconds=5, id="trade_manager")
+    scheduler.add_job(manage_open_trades, "interval", seconds=1, id="trade_manager")
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
     scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle", replace_existing=True)
     scheduler.add_job(run_m1_scalping_cycle, "cron", minute="*", id="m1_scalping_cycle")
     scheduler.add_job(momentum_runner.run_momentum_cycle, "cron", minute="0,15,30,45", id="momentum_runner_cycle")
     scheduler.add_job(m5_momentum_runner.run_m5_momentum_cycle, "cron", minute="*/5", id="m5_momentum_runner_cycle")
     scheduler.add_job(m15_momentum_runner.run_m15_momentum_cycle, "cron", minute="0,15,30,45", id="m15_momentum_runner_cycle")
+
+    # ── Gold Implementation 2 (Parallel Research Portfolio) ──
+    # Strategy 1: 2-Candle EMA Pullback — every 5 minutes
+    scheduler.add_job(gi2_candle_pullback.run_gi2_candle_pullback_cycle, "cron", minute="*/5", id="gi2_candle_pullback")
+    # Strategy 2: Asian Short — Entry at 04:00 GMT, Exit at 06:00 GMT
+    scheduler.add_job(gi2_asian_short.run_gi2_asian_short_entry, "cron", hour="4", minute="0", timezone="UTC", id="gi2_asian_short_entry")
+    scheduler.add_job(gi2_asian_short.run_gi2_asian_short_exit,  "cron", hour="6", minute="0", timezone="UTC", id="gi2_asian_short_exit")
+    # Strategy 3: Pre-London Long — Entry at 01:00 GMT, Exit at 04:00 GMT
+    scheduler.add_job(gi2_prelondon_long.run_gi2_prelondon_long_entry, "cron", hour="1", minute="0", timezone="UTC", id="gi2_prelondon_long_entry")
+    scheduler.add_job(gi2_prelondon_long.run_gi2_prelondon_long_exit,  "cron", hour="4", minute="0", timezone="UTC", id="gi2_prelondon_long_exit")
+    # ── Gold Implementation 3 (GI3) ──────────────────────────────────────────
+    scheduler.add_job(gi3_gold.run_vwap_reversion_cycle, "cron", minute="*/5", id="gi3_gold_vwap")
+    scheduler.add_job(gi3_gold.run_rsi_divergence_cycle, "cron", minute="0,15,30,45", id="gi3_gold_rsi")
+
+    # ── EUSDI1: EURUSD Strategies ────────────────────────────────────────────────
+    # Strategy: Daily Range Breakout (PDH/PDL Sweep)
+    scheduler.add_job(eusdi1_core.run_daily_breakout, "cron", minute="*/5", id="eusdi1_breakout")
+    # ── XAGI1: XAGUSD (Silver) Strategies ───────────────────────────────────────
+    # Strategy: MACD Zero Cross Stop & Reverse Runner (Hourly)
+    scheduler.add_job(xagi1_core.run_macd_trend, "cron", minute="0", id="xagi1_macd_trend")
+    # Strategy: EMA 9/21 Stop & Reverse Runner (Hourly)
+    scheduler.add_job(xagi2_core.run_ema_trend, "cron", minute="0", id="xagi2_ema_trend")
+    # ── GI2: XAGUSD (Silver) Strategies ───────────────────────────────────────
+    # [DISABLED] Silver is too highly trending for mean-reversion; removing to protect account
+    # scheduler.add_job(gi2_silver.run_silver_a_entry, "cron", hour="4",  minute="0", timezone="UTC", id="gi2_xag_a_entry")
+    # scheduler.add_job(gi2_silver.run_silver_a_exit,  "cron", hour="6",  minute="0", timezone="UTC", id="gi2_xag_a_exit")
+    # scheduler.add_job(gi2_silver.run_silver_b_entry, "cron", hour="13", minute="0", timezone="UTC", id="gi2_xag_b_entry")
+    # scheduler.add_job(gi2_silver.run_silver_b_exit,  "cron", hour="17", minute="0", timezone="UTC", id="gi2_xag_b_exit")
+    # scheduler.add_job(gi2_silver.run_silver_bb_cycle, "cron", minute="*/5", id="gi2_xag_bb")
+    # ─────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────
 
     logger.info("🚀 Engine scheduler started — running every 15 minutes")
     logger.info("   Press Ctrl+C to stop")

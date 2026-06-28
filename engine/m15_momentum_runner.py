@@ -79,6 +79,24 @@ def run_m15_momentum_cycle():
     # Check for existing pending orders to avoid duplicates
     session = get_session()
     try:
+        from sqlmodel import select
+        
+        # Prevent revenge trading: check if we ALREADY took this exact setup recently
+        recent_trades = session.exec(
+            select(Trade)
+            .where(Trade.direction == direction_filter)
+            .order_by(Trade.id.desc())
+            .limit(10)
+        ).all()
+        
+        now = datetime.now(timezone.utc)
+        for t in recent_trades:
+            trade_time = t.opened_at.replace(tzinfo=timezone.utc) if t.opened_at.tzinfo is None else t.opened_at
+            if (now - trade_time).total_seconds() < 3600: # 1 hour cooldown for exact same setup
+                if abs(t.planned_entry - limit_price) < 2.0:
+                    logger.info("⏭️ [M15 Momentum] We already traded this exact setup recently. Skipping to avoid duplicate/revenge trading.")
+                    return
+
         active_runner_trades = session.query(Trade).filter(
             Trade.status.in_(["OPEN", "PENDING"])
         ).all()
@@ -105,12 +123,7 @@ def run_m15_momentum_cycle():
         # Place Limit Order
         tp_price = limit_price + 3.0 if direction_filter == "LONG" else limit_price - 3.0
         
-        config = session.query(EngineConfig).filter(EngineConfig.is_active == True).first()
-        if not config: config = EngineConfig()
-        
-        risk_dollars = config.account_balance_equiv * (config.max_risk_percent / 100)
-        raw_lots = risk_dollars / (sl_dist_pips * 10.0)
-        lot_size = max(0.01, round(raw_lots - (raw_lots % 0.01), 2))
+        lot_size = 0.05
             
         logger.info(f"✅ [M15 Momentum] Placing {direction_filter} Limit Order at {limit_price:.2f} | SL: {sl_price:.2f} | Lots: {lot_size}")
         
