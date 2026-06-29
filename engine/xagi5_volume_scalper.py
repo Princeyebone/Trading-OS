@@ -1,6 +1,13 @@
+"""
+engine/xagi5_volume_scalper.py
+Scalper with a Volume Anomaly filter.
+Only enters trades if M5 tick volume is > 1.2x the 20-period moving average.
+Magic number: 202900
+"""
 import pandas as pd
 from datetime import datetime, timezone
 import logging
+import MetaTrader5 as mt5
 
 from engine.data_fetcher import fetch_ohlcv
 from engine.scalping_engine import ScalpingEngine, M1HyperEngine
@@ -8,32 +15,38 @@ from engine import broker_executor
 from app.models.signals import Signal
 from engine.db import get_session
 
-logger = logging.getLogger("engine.scalping.integration")
+logger = logging.getLogger("engine.xagi5_volume_scalper")
+MAGIC_NUMBER = 202900
 
-class ScalpingIntegration:
+class Xagi5VolumeScalper:
     def __init__(self):
         self.setup_types = ['BREAKOUT', 'EMA_PULLBACK', 'RANGE_BOUNCE', 'FIBONACCI', 'RANGE_BREAKOUT']
         self.signals = []
         
+    def _check_volume_anomaly(self, df: pd.DataFrame) -> bool:
+        if len(df) < 21:
+            return False
+        
+        # Calculate 20-period SMA of volume
+        vol_sma = df['volume'].rolling(20).mean().iloc[-2]
+        if vol_sma <= 0:
+            return False
+            
+        current_vol = df['volume'].iloc[-2] # Check the last closed candle
+        ratio = current_vol / vol_sma
+        
+        return ratio > 1.2
+
     def scan_m5(self):
         """Scan M5 data for scalping setups."""
         m5_data = fetch_ohlcv("M5", use_cache=False)
         if m5_data is None or len(m5_data) < 100:
             logger.warning("Insufficient M5 data for scalping")
-            return [], "UNKNOWN"
+            return [], False
             
         m15_data = fetch_ohlcv("M15", use_cache=True)
-        m15_trend = "UNKNOWN"
-        if m15_data is not None and len(m15_data) >= 50:
-            import ta
-            close_series = m15_data['close'].astype(float)
-            ema20 = ta.trend.ema_indicator(close_series, window=20).iloc[-1]
-            ema50 = ta.trend.ema_indicator(close_series, window=50).iloc[-1]
-            if not pd.isna(ema20) and not pd.isna(ema50):
-                if ema20 > ema50: m15_trend = "BULLISH"
-                elif ema20 < ema50: m15_trend = "BEARISH"
-            
         h4_data = fetch_ohlcv("H4", use_cache=True)
+        
         h4_trend = "UNKNOWN"
         if h4_data is not None and len(h4_data) >= 50:
             import ta
@@ -46,30 +59,18 @@ class ScalpingIntegration:
             
         # Run the scalping engine
         engine = ScalpingEngine(m5_data, m15_data)
-        current_idx = len(m5_data) - 1  # Latest candle
+        current_idx = len(m5_data) - 1
         
         new_signals = engine.scan(current_idx, h4_trend=h4_trend)
-        if not new_signals:
-            c_price = m5_data['close'].iloc[current_idx]
-            logger.info(f"Scan M5 complete: 0 setups found at price {c_price:.2f}. Waiting for criteria...")
-        return new_signals, h4_trend, m15_trend
+        has_volume = self._check_volume_anomaly(m5_data)
+        
+        return new_signals, has_volume
         
     def scan_m1(self):
         """Scan M1 data for hyper-scalping setups."""
         m1_data = fetch_ohlcv("M1", use_cache=False)
         if m1_data is None or len(m1_data) < 100:
-            return [], "UNKNOWN", "UNKNOWN"
-            
-        m15_data = fetch_ohlcv("M15", use_cache=True)
-        m15_trend = "UNKNOWN"
-        if m15_data is not None and len(m15_data) >= 50:
-            import ta
-            close_series = m15_data['close'].astype(float)
-            ema20 = ta.trend.ema_indicator(close_series, window=20).iloc[-1]
-            ema50 = ta.trend.ema_indicator(close_series, window=50).iloc[-1]
-            if not pd.isna(ema20) and not pd.isna(ema50):
-                if ema20 > ema50: m15_trend = "BULLISH"
-                elif ema20 < ema50: m15_trend = "BEARISH"
+            return [], False
             
         h4_data = fetch_ohlcv("H4", use_cache=True)
         h4_trend = "UNKNOWN"
@@ -86,41 +87,34 @@ class ScalpingIntegration:
         current_idx = len(m1_data) - 1
         
         new_signals = engine.scan(current_idx)
-        if not new_signals:
-            c_price = m1_data['close'].iloc[current_idx]
-            logger.info(f"Scan M1 complete: 0 hyper-scalps found at price {c_price:.2f}. Monitoring...")
-        return new_signals, h4_trend, m15_trend
+        
+        # M1 still uses the M5 volume anomaly for context
+        m5_data = fetch_ohlcv("M5", use_cache=True)
+        has_volume = False
+        if m5_data is not None:
+            has_volume = self._check_volume_anomaly(m5_data)
+        
+        return new_signals, has_volume
     
     def check_and_execute(self, config):
         """Check for new signals and execute them."""
-        new_signals, h4_trend, m15_trend = self.scan_m5()
+        new_signals, has_volume = self.scan_m5()
         
         if not new_signals:
+            return []
+            
+        if not has_volume:
+            logger.info("[XAGI5] Skipping M5 execution: Low Volume Chop (Ratio < 1.2)")
             return []
         
         executed = []
         for signal in new_signals:
-            # Skip signals that were adaptively skipped
             if signal.get('verdict') == 'WAIT':
-                logger.info(f"Signal skipped: {signal.get('skip_reason')}")
                 continue
                 
-            # ── RELAXED TREND FILTER ──
-            # Signal must align with either the H4 Trend OR the M15 Trend
-            # DISABLED: The H4/M15 macro filters cause too much lag during V-shape reversals.
-            # if h4_trend != "UNKNOWN" and m15_trend != "UNKNOWN":
-            #     if signal['direction'] == 'BULLISH' and h4_trend == 'BEARISH' and m15_trend == 'BEARISH':
-            #         logger.info(f"Signal skipped: TREND_FILTER (Blocked LONG in BEARISH H4/M15 trend)")
-            #         continue
-            #     if signal['direction'] == 'BEARISH' and h4_trend == 'BULLISH' and m15_trend == 'BULLISH':
-            #         logger.info(f"Signal skipped: TREND_FILTER (Blocked SHORT in BULLISH H4/M15 trend)")
-            #         continue
-                
-            # Check if this signal was already executed
             if self._is_duplicate(signal, lockout_seconds=1800):
                 continue
             
-            # Execute the trade
             trade_id, actual_entry, order_id = self._execute_signal(signal, config)
             if trade_id:
                 signal['trade_id'] = trade_id
@@ -133,26 +127,19 @@ class ScalpingIntegration:
         
     def check_and_execute_m1(self, config):
         """Check for new M1 signals and execute them."""
-        new_signals, h4_trend, m15_trend = self.scan_m1()
+        new_signals, has_volume = self.scan_m1()
         
         if not new_signals:
+            return []
+            
+        if not has_volume:
+            logger.info("[XAGI5] Skipping M1 execution: Low Volume Chop (Ratio < 1.2)")
             return []
             
         executed = []
         for signal in new_signals:
             if signal.get('verdict') == 'WAIT':
-                logger.info(f"M1 Signal skipped: {signal.get('skip_reason')}")
                 continue
-                
-            # ── RELAXED TREND FILTER ──
-            # DISABLED: The H4/M15 macro filters cause too much lag during V-shape reversals.
-            # if h4_trend != "UNKNOWN" and m15_trend != "UNKNOWN":
-            #     if signal['direction'] == 'BULLISH' and h4_trend == 'BEARISH' and m15_trend == 'BEARISH':
-            #         logger.info(f"M1 Signal skipped: TREND_FILTER (Blocked LONG in BEARISH H4/M15 trend)")
-            #         continue
-            #     if signal['direction'] == 'BEARISH' and h4_trend == 'BULLISH' and m15_trend == 'BULLISH':
-            #         logger.info(f"M1 Signal skipped: TREND_FILTER (Blocked SHORT in BULLISH H4/M15 trend)")
-            #         continue
                     
             if self._is_duplicate(signal, lockout_seconds=900): # 15 min lockout for M1
                 continue
@@ -168,90 +155,50 @@ class ScalpingIntegration:
         return executed
     
     def _is_duplicate(self, signal, lockout_seconds=1800):
-        """Check if signal was already executed recently."""
         now = datetime.now(timezone.utc)
-        
-        # Check in-memory first (fast)
         for prev_signal in reversed(self.signals[-20:]):
             time_diff = (now - prev_signal['timestamp'].replace(tzinfo=timezone.utc)).total_seconds()
             if prev_signal['type'] == signal['type'] and time_diff < lockout_seconds:
                 if prev_signal['direction'] == signal['direction']:
                     if abs(prev_signal['entry'] - signal['entry']) < 2.0:
                         return True
-                        
-        # Check database (persistent across Uvicorn reloads)
-        try:
-            from app.models.trades import Trade
-            from app.models.signals import Signal
-            from sqlmodel import select
-            
-            # Use the get_session from engine.db which returns a real Session, not a generator
-            session = get_session()
-            recent_trades = session.exec(
-                select(Trade, Signal)
-                .join(Signal, Trade.signal_id == Signal.id)
-                .where(Trade.direction == ("LONG" if signal['direction'] == 'BULLISH' else "SHORT"))
-                .order_by(Trade.id.desc())
-                .limit(5)
-            ).all()
-            session.close()
-            
-            for t, s in recent_trades:
-                # If trade was opened within the lockout period
-                if t.opened_at.tzinfo is None:
-                    trade_time = t.opened_at.replace(tzinfo=timezone.utc) # fallback
-                else:
-                    trade_time = t.opened_at
-                    
-                if (now - trade_time).total_seconds() < lockout_seconds:
-                    if abs(t.planned_entry - signal['entry']) < 2.0:
-                        logger.info(f"DB Duplicate detected: {signal['direction']} @ {signal['entry']}")
-                        return True
-        except Exception as e:
-            logger.warning(f"Failed to check DB for duplicates: {e}")
-            
         return False
     
-    def compute_lot_size(self, config, stop_loss_pips: float) -> float:
-        """Calculate lot size using the engine configuration."""
-        return 0.05
-    
     def _execute_signal(self, signal, config):
-        """Execute a scalping trade."""
         direction = "LONG" if signal['direction'] == 'BULLISH' else "SHORT"
         
         entry = signal['entry']
         sl = signal['sl']
         tp1 = signal['tp1']
         
-        sl_pips = abs(entry - sl) * 10
-        lot_size = self.compute_lot_size(config, sl_pips)
+        lot_size = 0.05
         
-        # We need a session to log
         session_db = get_session()
         
-        logger.info(f"SCALP EXECUTION: {direction} {lot_size} lots @ ~{entry} (Type={signal['type']} Step-Trailing TP)")
+        logger.info(f"[XAGI5] EXECUTION: {direction} {lot_size} lots @ ~{entry} (Type={signal['type']})")
         
         order_result = broker_executor.place_order(
             direction=direction,
             lot_size=lot_size,
             entry_price=entry,
             stop_loss=sl,
-            take_profit=0.0, # TP is managed by Step-Trailing system
+            take_profit=0.0, 
+            magic=MAGIC_NUMBER,
+            comment="XAGI5-VolScalp",
+            symbol="XAUUSD"
         )
         
-        if not order_result["success"]:
-            logger.error(f"Scalp Order failed: {order_result['error']}")
+        if not order_result.get("success"):
+            logger.error(f"[XAGI5] Order failed: {order_result.get('error')}")
             session_db.close()
             return None, None, None
             
-        # Log Signal
         db_sig = Signal(
             timeframe=signal.get('timeframe', 'M5'),
-            session="SCALP",
+            session="XAGI5",
             verdict="TRADE",
             direction=direction,
-            confidence=90, # Hardcoded high confidence for scalping
+            confidence=98,
             skip_reason=None,
             price_at_signal=signal['price'],
             prompt_version=0
@@ -259,14 +206,13 @@ class ScalpingIntegration:
         session_db.add(db_sig)
         session_db.flush()
         
-        # Log Trade
         from app.models.trades import Trade
         trade = Trade(
             signal_id=db_sig.id,
             direction=direction,
             planned_entry=entry,
             actual_entry=order_result["actual_entry"],
-            slippage_pips=order_result["slippage_pips"],
+            slippage_pips=order_result.get("slippage_pips", 0.0),
             stop_loss=sl,
             take_profit_1=tp1,
             take_profit_2=0.0,

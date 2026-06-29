@@ -58,6 +58,7 @@ def run_vwap_reversion_cycle():
     Trades back to the daily VWAP if price extends more than $8 from it.
     """
     try:
+        logger.info("[GI3-VWAP] Cycle starting...")
         now = datetime.now(timezone.utc)
         if is_dead_zone(now.hour):
             return
@@ -128,6 +129,7 @@ def run_rsi_divergence_cycle():
     Checks for structural trend exhaustion using RSI(14) over the last 15 candles.
     """
     try:
+        logger.info("[GI3-RSI-DIV] Cycle starting...")
         now = datetime.now(timezone.utc)
         if is_dead_zone(now.hour):
             return

@@ -80,6 +80,7 @@ def run_ema_trend():
     Evaluated hourly.
     """
     try:
+        logger.info("[XAGI2-EMA] Cycle starting...")
         if not broker_executor._init_mt5():
             return
             

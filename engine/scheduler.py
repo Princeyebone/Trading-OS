@@ -23,7 +23,7 @@ from sqlmodel import Session, select
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.db import get_session, is_db_alive
-from engine import data_fetcher, indicators, pattern_detector, claude_analyst, qwen_analyst, broker_executor, telegram_notifier, momentum_runner, m5_momentum_runner, m15_momentum_runner
+from engine import data_fetcher, indicators, pattern_detector, claude_analyst, qwen_analyst, broker_executor, telegram_notifier, momentum_runner, m5_momentum_runner, m15_momentum_runner, eusdi2_asian_breakout, eusdi3_camarilla, eusdi4_institutional, eusdi5_profiling
 from engine.rule_engine import evaluate_all as rule_engine_evaluate
 from engine.news_guard import is_news_blackout
 from engine.outcome_monitor import check_and_close_trades
@@ -32,7 +32,10 @@ from engine.market_tape_monitor import detect_tape_events
 from engine.scalping_integration import ScalpingIntegration
 # ── Gold Implementation 2 (Parallel Research Portfolio) ──────────────────────
 from engine import gi2_candle_pullback, gi2_asian_short, gi2_prelondon_long
-from engine import gi3_eurusd, gi3_gold, gi2_silver, eusdi1_core, xagi1_core, xagi2_core
+from engine import gi3_eurusd, gi3_gold, gi2_silver, eusdi1_core, xagi1_core, xagi2_core, eusdi2_asian_breakout
+from engine import xagi3_tape_sweep
+from engine.xagi4_trend_scalper import Xagi4TrendScalper
+from engine.xagi5_volume_scalper import Xagi5VolumeScalper
 # ─────────────────────────────────────────────────────────────────────────────
 from app.models.signals import Signal, MarketContext, PatternEvent
 from app.models.trades import Trade, TradeJournal, StraddlePair
@@ -102,9 +105,9 @@ def run_preflight(session: Session, config: EngineConfig) -> tuple[bool, str]:
     if config.max_trades_per_day > 0 and len(daily_trades) >= config.max_trades_per_day:
         return False, f"DAILY_LIMIT_REACHED ({len(daily_trades)}/{config.max_trades_per_day})"
 
-    # 4. Max open trades
+    # 4. Max open trades (0 means unlimited)
     open_trades = session.exec(select(Trade).where(Trade.status == "OPEN")).all()
-    if len(open_trades) >= config.max_open_trades:
+    if config.max_open_trades > 0 and len(open_trades) >= config.max_open_trades:
         return False, f"MAX_OPEN_TRADES ({len(open_trades)})"
 
     # 5. Consecutive loss pause
@@ -680,6 +683,124 @@ def run_m1_scalping_cycle():
     finally:
         session.close()
 
+# ── XAGI4 Trend Scalping Jobs ──
+_xagi4_integration = None
+
+def run_xagi4_scalping_cycle():
+    """Runs every minute to check for XAGI4 scalping signals on M5 data."""
+    global DRY_RUN, _xagi4_integration
+    
+    if _xagi4_integration is None:
+        _xagi4_integration = Xagi4TrendScalper()
+        
+    logger.info("[XAGI4] Scalping cycle starting...")
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _xagi4_integration.check_and_execute(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAGI4] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("XAGI4 Trend Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"XAGI4 Scalping cycle error: {e}")
+    finally:
+        session.close()
+
+def run_xagi4_m1_scalping_cycle():
+    """Runs every minute to check for XAGI4 M1 hyper-scalping signals."""
+    global DRY_RUN, _xagi4_integration
+    
+    if DRY_RUN:
+        return
+        
+    if _xagi4_integration is None:
+        _xagi4_integration = Xagi4TrendScalper()
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _xagi4_integration.check_and_execute_m1(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAGI4] M1 Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("XAGI4 M1 Hyper-Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"XAGI4 M1 Scalping cycle error: {e}")
+    finally:
+        session.close()
+
+# ── XAGI5 Volume Scalping Jobs ──
+_xagi5_integration = None
+
+def run_xagi5_scalping_cycle():
+    """Runs every minute to check for XAGI5 scalping signals on M5 data."""
+    global DRY_RUN, _xagi5_integration
+    
+    if _xagi5_integration is None:
+        _xagi5_integration = Xagi5VolumeScalper()
+        
+    logger.info("[XAGI5] Scalping cycle starting...")
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _xagi5_integration.check_and_execute(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAGI5] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("XAGI5 Volume Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"XAGI5 Scalping cycle error: {e}")
+    finally:
+        session.close()
+
+def run_xagi5_m1_scalping_cycle():
+    """Runs every minute to check for XAGI5 M1 hyper-scalping signals."""
+    global DRY_RUN, _xagi5_integration
+    
+    if DRY_RUN:
+        return
+        
+    if _xagi5_integration is None:
+        _xagi5_integration = Xagi5VolumeScalper()
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _xagi5_integration.check_and_execute_m1(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAGI5] M1 Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("XAGI5 M1 Hyper-Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"XAGI5 M1 Scalping cycle error: {e}")
+    finally:
+        session.close()
+
+
+
 
 # ─── Entry point ────────────────────────────────────────────────────────────────
 def start_background_scheduler():
@@ -694,6 +815,14 @@ def start_background_scheduler():
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
     scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle", replace_existing=True)
     scheduler.add_job(run_m1_scalping_cycle, "cron", minute="*", id="m1_scalping_cycle")
+    
+    # XAGI4
+    scheduler.add_job(run_xagi4_scalping_cycle, "cron", minute="*", id="xagi4_scalping_cycle")
+    scheduler.add_job(run_xagi4_m1_scalping_cycle, "cron", minute="*", id="xagi4_m1_scalping_cycle")
+    
+    # XAGI5
+    scheduler.add_job(run_xagi5_scalping_cycle, "cron", minute="*", id="xagi5_scalping_cycle")
+    scheduler.add_job(run_xagi5_m1_scalping_cycle, "cron", minute="*", id="xagi5_m1_scalping_cycle")
     scheduler.add_job(momentum_runner.run_momentum_cycle, "cron", minute="0,15,30,45", id="momentum_runner_cycle")
     scheduler.add_job(m5_momentum_runner.run_m5_momentum_cycle, "cron", minute="*/5", id="m5_momentum_runner_cycle")
     scheduler.add_job(m15_momentum_runner.run_m15_momentum_cycle, "cron", minute="0,15,30,45", id="m15_momentum_runner_cycle")
@@ -707,13 +836,17 @@ def start_background_scheduler():
     # Strategy 3: Pre-London Long — Entry at 01:00 GMT, Exit at 04:00 GMT
     scheduler.add_job(gi2_prelondon_long.run_gi2_prelondon_long_entry, "cron", hour="1", minute="0", timezone="UTC", id="gi2_prelondon_long_entry")
     scheduler.add_job(gi2_prelondon_long.run_gi2_prelondon_long_exit,  "cron", hour="4", minute="0", timezone="UTC", id="gi2_prelondon_long_exit")
-    # ── Gold Implementation 3 (GI3) ──────────────────────────────────────────
+    # -- Gold Implementation 3 (GI3) --
     scheduler.add_job(gi3_gold.run_vwap_reversion_cycle, "cron", minute="*/5", id="gi3_gold_vwap")
     scheduler.add_job(gi3_gold.run_rsi_divergence_cycle, "cron", minute="0,15,30,45", id="gi3_gold_rsi")
+    # -- XAGI3: Gold Tape Reading Liquidity Sweep (London/NY session only 07:00-17:00 MT5 time) --
+    scheduler.add_job(xagi3_tape_sweep.run_xagi3_cycle, "cron", minute="*", id="xagi3_tape_sweep")
 
     # ── EUSDI1: EURUSD Strategies ────────────────────────────────────────────────
     # Strategy: Daily Range Breakout (PDH/PDL Sweep)
     scheduler.add_job(eusdi1_core.run_daily_breakout, "cron", minute="*/5", id="eusdi1_breakout")
+    # Strategy: Asian Range Breakout (EUSDI2)
+    scheduler.add_job(eusdi2_asian_breakout.run_asian_breakout, "cron", minute="*/5", id="eusdi2_asian_breakout")
     # ── XAGI1: XAGUSD (Silver) Strategies ───────────────────────────────────────
     # Strategy: MACD Zero Cross Stop & Reverse Runner (Hourly)
     scheduler.add_job(xagi1_core.run_macd_trend, "cron", minute="0", id="xagi1_macd_trend")
@@ -756,6 +889,15 @@ def main():
     scheduler.add_job(detect_tape_events, "cron", minute="*", id="tape_monitor")
     scheduler.add_job(run_scalping_cycle, "cron", minute="*", id="scalping_cycle", replace_existing=True)
     scheduler.add_job(run_m1_scalping_cycle, "cron", minute="*", id="m1_scalping_cycle")
+    
+    # XAGI4
+    scheduler.add_job(run_xagi4_scalping_cycle, "cron", minute="*", id="xagi4_scalping_cycle")
+    scheduler.add_job(run_xagi4_m1_scalping_cycle, "cron", minute="*", id="xagi4_m1_scalping_cycle")
+    
+    # XAGI5
+    scheduler.add_job(run_xagi5_scalping_cycle, "cron", minute="*", id="xagi5_scalping_cycle")
+    scheduler.add_job(run_xagi5_m1_scalping_cycle, "cron", minute="*", id="xagi5_m1_scalping_cycle")
+    
     scheduler.add_job(momentum_runner.run_momentum_cycle, "cron", minute="0,15,30,45", id="momentum_runner_cycle")
     scheduler.add_job(m5_momentum_runner.run_m5_momentum_cycle, "cron", minute="*/5", id="m5_momentum_runner_cycle")
     scheduler.add_job(m15_momentum_runner.run_m15_momentum_cycle, "cron", minute="0,15,30,45", id="m15_momentum_runner_cycle")
@@ -769,13 +911,27 @@ def main():
     # Strategy 3: Pre-London Long — Entry at 01:00 GMT, Exit at 04:00 GMT
     scheduler.add_job(gi2_prelondon_long.run_gi2_prelondon_long_entry, "cron", hour="1", minute="0", timezone="UTC", id="gi2_prelondon_long_entry")
     scheduler.add_job(gi2_prelondon_long.run_gi2_prelondon_long_exit,  "cron", hour="4", minute="0", timezone="UTC", id="gi2_prelondon_long_exit")
-    # ── Gold Implementation 3 (GI3) ──────────────────────────────────────────
+    # -- Gold Implementation 3 (GI3) --
     scheduler.add_job(gi3_gold.run_vwap_reversion_cycle, "cron", minute="*/5", id="gi3_gold_vwap")
     scheduler.add_job(gi3_gold.run_rsi_divergence_cycle, "cron", minute="0,15,30,45", id="gi3_gold_rsi")
+    # -- XAGI3: Gold Tape Reading Liquidity Sweep (London/NY session only 07:00-17:00 MT5 time) --
+    scheduler.add_job(xagi3_tape_sweep.run_xagi3_cycle, "cron", minute="*", id="xagi3_tape_sweep")
 
     # ── EUSDI1: EURUSD Strategies ────────────────────────────────────────────────
     # Strategy: Daily Range Breakout (PDH/PDL Sweep)
     scheduler.add_job(eusdi1_core.run_daily_breakout, "cron", minute="*/5", id="eusdi1_breakout")
+    # Strategy: Asian Range Breakout (EUSDI2)
+    scheduler.add_job(eusdi2_asian_breakout.run_asian_breakout, "cron", minute="*/5", id="eusdi2_asian_breakout")
+    # Strategy: Camarilla Reversal (EUSDI3)
+    scheduler.add_job(eusdi3_camarilla.run_camarilla_reversal, "cron", minute="*/5", id="eusdi3_camarilla")
+    # Strategy: Weekly Gap Close (EUSDI4) - Mon 00:05 UTC
+    scheduler.add_job(eusdi4_institutional.run_weekly_gap_close, "cron", day_of_week="mon", hour="0", minute="5", timezone="UTC", id="eusdi4_weekly_gap")
+    # Strategy: London Fix Reversal (EUSDI4) - Mon-Fri 17:00 UTC
+    scheduler.add_job(eusdi4_institutional.run_london_fix_fade, "cron", day_of_week="mon-fri", hour="17", minute="0", timezone="UTC", id="eusdi4_london_fix")
+    # Strategy: ADR Exhaustion (EUSDI5) - Every 15 mins
+    scheduler.add_job(eusdi5_profiling.run_adr_exhaustion, "cron", minute="*/15", id="eusdi5_adr_exhaustion")
+    # Strategy: Asian Squeeze Breakout (EUSDI5) - Mon-Fri 07:05 UTC
+    scheduler.add_job(eusdi5_profiling.run_asian_volatility_squeeze, "cron", day_of_week="mon-fri", hour="7", minute="5", timezone="UTC", id="eusdi5_asian_squeeze")
     # ── XAGI1: XAGUSD (Silver) Strategies ───────────────────────────────────────
     # Strategy: MACD Zero Cross Stop & Reverse Runner (Hourly)
     scheduler.add_job(xagi1_core.run_macd_trend, "cron", minute="0", id="xagi1_macd_trend")

@@ -50,6 +50,8 @@ def place_order(
     stop_loss: float,
     take_profit: float,
     comment: str = "TradingOS",
+    symbol: str = 'XAUUSD',
+    magic: int = 202600,
 ) -> dict:
     """
     Place a market order on MT5 demo.
@@ -74,22 +76,22 @@ def place_order(
         action = mt5.TRADE_ACTION_DEAL
         order_type = mt5.ORDER_TYPE_BUY if direction == "LONG" else mt5.ORDER_TYPE_SELL
 
-        tick = mt5.symbol_info_tick(SYMBOL)
+        tick = mt5.symbol_info_tick(symbol)
         if tick is None:
-            return {"success": False, "error": f"Cannot get tick for {SYMBOL}", "order_id": None, "actual_entry": None, "slippage_pips": None}
+            return {"success": False, "error": f"Cannot get tick for {symbol}", "order_id": None, "actual_entry": None, "slippage_pips": None}
 
         price = tick.ask if direction == "LONG" else tick.bid
 
         request = {
             "action": action,
-            "symbol": SYMBOL,
+            "symbol": symbol,
             "volume": lot_size,
             "type": order_type,
             "price": round(price, 2),
             "sl": round(stop_loss, 2) if stop_loss > 0 else 0.0,
             "tp": round(take_profit, 2) if take_profit > 0 else 0.0,
             "deviation": 20,
-            "magic": 202600,
+            "magic": magic,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
@@ -128,7 +130,8 @@ def place_limit_order(
     stop_loss: float,
     take_profit: float,
     magic: int = 202600,
-    comment: str = "TradingOS"
+    comment: str = "TradingOS",
+    symbol: str = 'XAUUSD',
 ) -> dict:
     """Place a pending Limit Order."""
     if STUB_MODE:
@@ -145,7 +148,7 @@ def place_limit_order(
         
         request = {
             "action": action,
-            "symbol": SYMBOL,
+            "symbol": symbol,
             "volume": lot_size,
             "type": order_type,
             "price": round(entry_price, 2),
@@ -175,7 +178,7 @@ def place_limit_order(
         return {"success": False, "error": str(e), "order_id": None}
 
 
-def get_open_positions() -> list:
+def get_open_positions(symbol: str = 'XAUUSD') -> list:
     """Return list of open MT5 positions for XAUUSD."""
     if STUB_MODE:
         return []
@@ -183,7 +186,7 @@ def get_open_positions() -> list:
         import MetaTrader5 as mt5
         if not _init_mt5():
             return []
-        positions = mt5.positions_get(symbol=SYMBOL)
+        positions = mt5.positions_get(symbol=symbol)
         if positions is None:
             return []
         return [
@@ -218,7 +221,7 @@ def get_account_balance() -> float:
         return 500.0
 
 
-def close_position(ticket: int) -> bool:
+def close_position(ticket: int, symbol: str = 'XAUUSD') -> bool:
     """Close a specific position by ticket number."""
     if STUB_MODE:
         logger.info(f"[STUB] Would close position #{ticket}")
@@ -232,12 +235,12 @@ def close_position(ticket: int) -> bool:
             return False
         pos = position[0]
         order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
-        tick = mt5.symbol_info_tick(SYMBOL)
+        tick = mt5.symbol_info_tick(symbol)
         price = tick.bid if pos.type == 0 else tick.ask
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": SYMBOL,
+            "symbol": symbol,
             "volume": pos.volume,
             "type": order_type,
             "position": ticket,
@@ -255,7 +258,7 @@ def close_position(ticket: int) -> bool:
         return False
 
 
-def modify_position_sl(ticket: int, new_sl: float) -> bool:
+def modify_position_sl(ticket: int, new_sl: float, symbol: str = 'XAUUSD') -> bool:
     """Update Stop Loss for a specific position."""
     if STUB_MODE:
         logger.info(f"[STUB] Would modify position #{ticket} SL to {new_sl}")
@@ -271,7 +274,7 @@ def modify_position_sl(ticket: int, new_sl: float) -> bool:
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "position": ticket,
-            "symbol": SYMBOL,
+            "symbol": symbol,
             "sl": round(new_sl, 2),
             "tp": pos.tp,
             "magic": 202600
@@ -288,7 +291,7 @@ def modify_position_sl(ticket: int, new_sl: float) -> bool:
         return False
 
 
-def close_partial_position(ticket: int, percent: float = 50.0) -> bool:
+def close_partial_position(ticket: int, percent: float = 50.0, symbol: str = 'XAUUSD') -> bool:
     """Close a percentage of an open position."""
     if STUB_MODE:
         logger.info(f"[STUB] Would close {percent}% of position #{ticket}")
@@ -301,9 +304,9 @@ def close_partial_position(ticket: int, percent: float = 50.0) -> bool:
         if not position: return False
         pos = position[0]
         
-        symbol_info = mt5.symbol_info(SYMBOL)
+        symbol_info = mt5.symbol_info(symbol)
         if not symbol_info:
-            logger.error(f"Failed to get symbol info for {SYMBOL}")
+            logger.error(f"Failed to get symbol info for {symbol}")
             return False
             
         vol_step = symbol_info.volume_step
@@ -319,12 +322,12 @@ def close_partial_position(ticket: int, percent: float = 50.0) -> bool:
             return close_position(ticket)
             
         order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
-        tick = mt5.symbol_info_tick(SYMBOL)
+        tick = mt5.symbol_info_tick(symbol)
         price = tick.bid if pos.type == 0 else tick.ask
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": SYMBOL,
+            "symbol": symbol,
             "volume": close_volume,
             "type": order_type,
             "position": ticket,
@@ -346,7 +349,7 @@ def close_partial_position(ticket: int, percent: float = 50.0) -> bool:
         logger.error(f"close_partial_position error: {e}")
         return False
 
-def check_spread(symbol: str = SYMBOL) -> float:
+def check_spread(symbol: str = 'XAUUSD') -> float:
     """Returns the current spread in points."""
     if STUB_MODE:
         return 10.0
@@ -366,7 +369,8 @@ def place_straddle_orders(
     lot_size: float,
     sl_dist: float,
     tp1_dist: float,
-    expiration_hours: int = 4
+    expiration_hours: int = 4,
+    symbol: str = 'XAUUSD',
 ) -> dict:
     """
     Place a Buy Stop and Sell Stop order simultaneously.
@@ -386,7 +390,7 @@ def place_straddle_orders(
         if not _init_mt5():
             return {"success": False, "error": "MT5 not connected", "buy_order_id": None, "sell_order_id": None}
             
-        spread = check_spread(SYMBOL)
+        spread = check_spread(symbol)
         if spread > 25:
             logger.warning(f"STRADDLE_BLOCKED_HIGH_SPREAD: {spread} points")
             return {"success": False, "error": f"STRADDLE_BLOCKED_HIGH_SPREAD ({spread})", "buy_order_id": None, "sell_order_id": None}
@@ -397,7 +401,7 @@ def place_straddle_orders(
         # BUY STOP
         buy_request = {
             "action": mt5.TRADE_ACTION_PENDING,
-            "symbol": SYMBOL,
+            "symbol": symbol,
             "volume": lot_size,
             "type": mt5.ORDER_TYPE_BUY_STOP,
             "price": round(buy_stop_price, 2),
@@ -413,7 +417,7 @@ def place_straddle_orders(
         # SELL STOP
         sell_request = {
             "action": mt5.TRADE_ACTION_PENDING,
-            "symbol": SYMBOL,
+            "symbol": symbol,
             "volume": lot_size,
             "type": mt5.ORDER_TYPE_SELL_STOP,
             "price": round(sell_stop_price, 2),
@@ -494,7 +498,7 @@ def verify_cancellation(ticket: int) -> bool:
         
     return False
 
-def check_straddle_status(buy_ticket: int, sell_ticket: int) -> dict:
+def check_straddle_status(buy_ticket: int, sell_ticket: int, symbol: str = 'XAUUSD') -> dict:
     """
     Returns state of the straddle pair.
     { "buy_filled": bool, "sell_filled": bool, "buy_expired": bool, "sell_expired": bool }
@@ -513,7 +517,7 @@ def check_straddle_status(buy_ticket: int, sell_ticket: int) -> dict:
     buy_expired = False
     sell_expired = False
     
-    positions = mt5.positions_get(symbol=SYMBOL)
+    positions = mt5.positions_get(symbol=symbol)
     if positions:
         for p in positions:
             if p.identifier == buy_ticket:

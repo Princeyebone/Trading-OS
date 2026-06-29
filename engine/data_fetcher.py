@@ -72,7 +72,24 @@ def check_staleness(df: pd.DataFrame) -> bool:
         return True
     if settings.ignore_staleness:
         return False
+        
     latest_candle_time = df.index[-1].to_pydatetime()
+    
+    if settings.data_feed_mode == "mt5":
+        import MetaTrader5 as mt5
+        from engine import broker_executor
+        if broker_executor._init_mt5():
+            info = mt5.symbol_info(broker_executor.SYMBOL)
+            if info:
+                # MT5 info.time is an epoch timestamp from the MT5 server. 
+                # Converting to naive local datetime perfectly aligns with MT5 candle datetimes
+                current_server_time = datetime.fromtimestamp(info.time)
+                # Remove tzinfo from latest_candle_time just in case
+                latest_naive = latest_candle_time.replace(tzinfo=None)
+                age_minutes = (current_server_time - latest_naive).total_seconds() / 60
+                return age_minutes > STALENESS_MINUTES
+                
+    # Fallback to UTC if not MT5
     if latest_candle_time.tzinfo is None:
         latest_candle_time = latest_candle_time.replace(tzinfo=timezone.utc)
     age_minutes = (datetime.now(timezone.utc) - latest_candle_time).total_seconds() / 60

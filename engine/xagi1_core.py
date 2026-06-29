@@ -78,6 +78,7 @@ def run_macd_trend():
     Evaluated hourly.
     """
     try:
+        logger.info("[XAGI1-MACD] Cycle starting...")
         if not broker_executor._init_mt5():
             return
             

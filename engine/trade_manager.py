@@ -247,6 +247,25 @@ def manage_open_trades():
                 logger.info(f"📈 [M5 Runner Monitor] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 20 pips)")
                 continue
 
+            # XAGI4 Trend Scalper Logic (Magic 202800)
+            if mt5_pos[0].magic == 202800:
+                if trade.opened_at:
+                    trade_age_mins = (datetime.now(timezone.utc) - trade.opened_at.replace(tzinfo=timezone.utc)).total_seconds() / 60.0
+                    
+                    if trade.direction == "LONG":
+                        profit_pips = (live_bid - entry) * 10
+                    else:
+                        profit_pips = (entry - live_ask) * 10
+                    
+                    # 20-Minute Forced Close Rule
+                    if trade_age_mins > 20 and profit_pips < 0:
+                        logger.info(f"⏰ [XAGI4] Trade #{trade.id} aged {trade_age_mins:.1f} mins and is negative ({profit_pips:.1f} pips). Force Closing!")
+                        success = broker_executor.close_position(ticket)
+                        if success:
+                            telegram_notifier.notify_success("XAGI4 Force Close", f"⏰ Trade #{trade.id} Force Closed after 20 mins to prevent trend drag. Loss: {profit_pips:.1f} pips.")
+                        continue
+                # If not forced closed, let it fall through to the generic Step TP logic
+
             # M15 Momentum Sibling Trailing Logic (Magic 202604)
             if mt5_pos[0].magic == 202604:
                 # Use a tighter 15-pip trailing stop for the M15 timeframe

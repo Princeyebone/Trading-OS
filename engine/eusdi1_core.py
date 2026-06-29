@@ -94,6 +94,7 @@ def run_daily_breakout():
     If it breaks yesterday's low, sell (once per day).
     """
     try:
+        logger.info("[EUSDI1] Daily Breakout cycle starting...")
         if not broker_executor._init_mt5():
             return
             
@@ -107,6 +108,8 @@ def run_daily_breakout():
             
         current_bid = tick.bid
         current_ask = tick.ask
+        
+        logger.info(f"[{SYMBOL}] Monitoring Daily Range | PDH: {pdh:.5f} | PDL: {pdl:.5f} | Current Bid: {current_bid:.5f}")
         
         # Check Long Breakout (Ask > PDH)
         if current_ask > pdh:
