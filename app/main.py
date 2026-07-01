@@ -40,6 +40,13 @@ async def lifespan(app: FastAPI):
     
     # Start Real-Time Monitor daemon
     try:
+        # Kill any existing zombie processes on Windows
+        if sys.platform == "win32":
+            subprocess.run(
+                ["powershell", "-Command", "Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -match 'engine.realtime_monitor' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+                capture_output=True
+            )
+            
         _realtime_monitor_process = subprocess.Popen(
             [sys.executable, "-m", "engine.realtime_monitor"],
             cwd="c:\\Users\\HP\\OneDrive\\Desktop\\tb\\backend"

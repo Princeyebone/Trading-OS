@@ -5,6 +5,7 @@ import numpy as np
 import MetaTrader5 as mt5
 
 from engine import broker_executor, telegram_notifier
+from engine.db import log_trade_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,17 @@ def run_vwap_reversion_cycle():
                 comment="GI3_VWAP"
             )
             if res.get("success"):
+                log_trade_to_db(
+                    system="GI3-Gold",
+                    direction=direction,
+                    symbol="XAUUSD",
+                    actual_entry=(res.get("actual_entry") or 0.0),
+                    stop_loss=sl_price if 'sl_price' in dir() else 0.0,
+                    take_profit=tp_price if 'tp_price' in dir() else 0.0,
+                    lot_size=0.05,
+                    broker_order_id=str(res.get("order_id", "")),
+                    timeframe="M15",
+                )
                 telegram_notifier.notify_info(
                     "GI3 VWAP Reversion Trigger",
                     f"{direction} {SYMBOL} @ {c:.2f}\nTarget VWAP: {v:.2f}\nStop Loss: {sl:.2f}"
@@ -196,6 +208,17 @@ def run_rsi_divergence_cycle():
                 comment="GI3_RSI_DIV"
             )
             if res.get("success"):
+                log_trade_to_db(
+                    system="GI3-Gold",
+                    direction=direction,
+                    symbol="XAUUSD",
+                    actual_entry=(res.get("actual_entry") or 0.0),
+                    stop_loss=sl_price if 'sl_price' in dir() else 0.0,
+                    take_profit=tp_price if 'tp_price' in dir() else 0.0,
+                    lot_size=0.05,
+                    broker_order_id=str(res.get("order_id", "")),
+                    timeframe="M15",
+                )
                 telegram_notifier.notify_info(
                     "GI3 RSI Divergence Trigger",
                     f"{direction} {SYMBOL} @ {curr_c:.2f}\nRSI: {curr_rsi:.1f}\nStop Loss: {sl:.2f}"

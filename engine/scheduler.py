@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.db import get_session, is_db_alive
 from engine import data_fetcher, indicators, pattern_detector, claude_analyst, qwen_analyst, broker_executor, telegram_notifier, momentum_runner, m5_momentum_runner, m15_momentum_runner, eusdi2_asian_breakout, eusdi3_camarilla, eusdi4_institutional, eusdi5_profiling
+from engine.eusdi6_hyper_scalper import Eusdi6HyperScalper
+from engine.eusdi7_momentum_scalper import Eusdi7MomentumScalper
 from engine.rule_engine import evaluate_all as rule_engine_evaluate
 from engine.news_guard import is_news_blackout
 from engine.outcome_monitor import check_and_close_trades
@@ -541,6 +543,8 @@ def run_engine_cycle():
                 confidence=confidence,
                 order_id=f"BS:{order_result['buy_order_id']}|SS:{order_result['sell_order_id']}",
                 reasoning=f"ABE Bilateral Straddle Placed. BuyStop={buy_stop}, SellStop={sell_stop}",
+                symbol="EURUSD" if "EUSD" in signal.session else ("XAGUSD" if "XAG" in signal.session else "XAUUSD"),
+                system=signal.session
             )
             return
 
@@ -563,12 +567,16 @@ def run_engine_cycle():
             return
 
         logger.info(f"Executing: {direction} {lot_size} lots @ ~{entry} (Step-Trailing TP)")
+        
+        trade_symbol = "EURUSD" if "EUSD" in signal.session else ("XAGUSD" if "XAG" in signal.session else "XAUUSD")
+        
         order_result = broker_executor.place_order(
             direction=direction,
             lot_size=lot_size,
             entry_price=entry,
             stop_loss=sl,
             take_profit=0.0,  # CRITICAL: TP is 0.0 for Ratcheting TP system
+            symbol=trade_symbol,
         )
 
         if not order_result["success"]:
@@ -611,6 +619,8 @@ def run_engine_cycle():
             confidence=confidence,
             order_id=order_result["order_id"],
             reasoning=analysis.get("reasoning", ""),
+            symbol=trade_symbol,
+            system=signal.session
         )
 
         logger.info(f"Trade logged: ID={trade.id} | Order={order_result['order_id']}")
@@ -647,8 +657,8 @@ def run_scalping_cycle():
         
         if executed:
             for sig in executed:
-                logger.info(f"Scalp Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
-                telegram_notifier.notify_info("Scalping Engine", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                logger.info(f"[XAUUSD-i1-v2] Scalp Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i1-v2] Gold Core Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
                 
     except Exception as e:
         logger.exception(f"Scalping cycle error: {e}")
@@ -675,8 +685,8 @@ def run_m1_scalping_cycle():
         
         if executed:
             for sig in executed:
-                logger.info(f"M1 Scalp Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
-                telegram_notifier.notify_info("M1 Hyper-Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                logger.info(f"[XAUUSD-i1-v2] M1 Scalp Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i1-v2] M1 Hyper-Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
                 
     except Exception as e:
         logger.exception(f"M1 Scalping cycle error: {e}")
@@ -693,7 +703,7 @@ def run_xagi4_scalping_cycle():
     if _xagi4_integration is None:
         _xagi4_integration = Xagi4TrendScalper()
         
-    logger.info("[XAGI4] Scalping cycle starting...")
+    logger.info("[XAUUSD-i4] Scalping cycle starting...")
         
     session = get_session()
     try:
@@ -705,8 +715,8 @@ def run_xagi4_scalping_cycle():
         
         if executed:
             for sig in executed:
-                logger.info(f"[XAGI4] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
-                telegram_notifier.notify_info("XAGI4 Trend Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                logger.info(f"[XAUUSD-i4-v2] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i4-v2] Gold Trend Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
                 
     except Exception as e:
         logger.exception(f"XAGI4 Scalping cycle error: {e}")
@@ -733,8 +743,8 @@ def run_xagi4_m1_scalping_cycle():
         
         if executed:
             for sig in executed:
-                logger.info(f"[XAGI4] M1 Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
-                telegram_notifier.notify_info("XAGI4 M1 Hyper-Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                logger.info(f"[XAUUSD-i4-v2] M1 Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i4-v2] Gold Trend M1 Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
                 
     except Exception as e:
         logger.exception(f"XAGI4 M1 Scalping cycle error: {e}")
@@ -751,7 +761,7 @@ def run_xagi5_scalping_cycle():
     if _xagi5_integration is None:
         _xagi5_integration = Xagi5VolumeScalper()
         
-    logger.info("[XAGI5] Scalping cycle starting...")
+    logger.info("[XAUUSD-i5] Scalping cycle starting...")
         
     session = get_session()
     try:
@@ -763,8 +773,8 @@ def run_xagi5_scalping_cycle():
         
         if executed:
             for sig in executed:
-                logger.info(f"[XAGI5] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
-                telegram_notifier.notify_info("XAGI5 Volume Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                logger.info(f"[XAUUSD-i5-v2] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i5-v2] Gold Volume Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
                 
     except Exception as e:
         logger.exception(f"XAGI5 Scalping cycle error: {e}")
@@ -791,8 +801,8 @@ def run_xagi5_m1_scalping_cycle():
         
         if executed:
             for sig in executed:
-                logger.info(f"[XAGI5] M1 Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
-                telegram_notifier.notify_info("XAGI5 M1 Hyper-Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                logger.info(f"[XAUUSD-i5-v2] M1 Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i5-v2] Gold Volume M1 Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
                 
     except Exception as e:
         logger.exception(f"XAGI5 M1 Scalping cycle error: {e}")
@@ -801,6 +811,62 @@ def run_xagi5_m1_scalping_cycle():
 
 
 
+
+# ── EUSDI6 Mean Reversion Scalping Jobs ──
+_eusdi6_integration = None
+
+def run_eusdi6_scalping_cycle():
+    """Runs every minute to check for EUSDI6 MR scalping signals."""
+    global DRY_RUN, _eusdi6_integration
+    
+    if DRY_RUN:
+        return
+        
+    if _eusdi6_integration is None:
+        _eusdi6_integration = Eusdi6HyperScalper()
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _eusdi6_integration.check_and_execute(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[EURUSD-i6-v2] MR Scalp Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[EURUSD-i6-v2] Mean Reversion Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"EUSDI6 Scalping cycle error: {e}")
+    finally:
+        session.close()
+
+# ── EUSDI7 Momentum Scalping Jobs ──
+_eusdi7_integration = None
+
+def run_eusdi7_scalping_cycle():
+    """Runs every minute to check for EUSDI7 momentum scalping signals."""
+    global DRY_RUN, _eusdi7_integration
+    
+    if DRY_RUN:
+        return
+        
+    if _eusdi7_integration is None:
+        _eusdi7_integration = Eusdi7MomentumScalper()
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        _eusdi7_integration.check_and_execute(config)
+    except Exception as e:
+        logger.exception(f"EUSDI7 Scalping cycle error: {e}")
+    finally:
+        session.close()
 
 # ─── Entry point ────────────────────────────────────────────────────────────────
 def start_background_scheduler():
@@ -847,6 +913,10 @@ def start_background_scheduler():
     scheduler.add_job(eusdi1_core.run_daily_breakout, "cron", minute="*/5", id="eusdi1_breakout")
     # Strategy: Asian Range Breakout (EUSDI2)
     scheduler.add_job(eusdi2_asian_breakout.run_asian_breakout, "cron", minute="*/5", id="eusdi2_asian_breakout")
+    # Strategy: EURUSD Mean Reversion Hyper Scalper (EUSDI6)
+    scheduler.add_job(run_eusdi6_scalping_cycle, "cron", minute="*", id="eusdi6_scalping_cycle")
+    # Strategy: EURUSD High-Frequency Momentum Scalper (EUSDI7)
+    scheduler.add_job(run_eusdi7_scalping_cycle, "cron", minute="*", id="eusdi7_scalping_cycle")
     # ── XAGI1: XAGUSD (Silver) Strategies ───────────────────────────────────────
     # Strategy: MACD Zero Cross Stop & Reverse Runner (Hourly)
     scheduler.add_job(xagi1_core.run_macd_trend, "cron", minute="0", id="xagi1_macd_trend")

@@ -78,7 +78,7 @@ def run_macd_trend():
     Evaluated hourly.
     """
     try:
-        logger.info("[XAGI1-MACD] Cycle starting...")
+        logger.info("[XAGUSD-i1] Cycle starting...")
         if not broker_executor._init_mt5():
             return
             
@@ -104,7 +104,7 @@ def run_macd_trend():
                     entry_price=current_price,
                     stop_loss=0.0,  # Pure SAR system, no fixed SL/TP
                     take_profit=0.0,
-                    comment="XAGI1_LONG"
+                    comment="XAUUSD-i1-L-v2"
                 )
                 if res.get("success"):
                     telegram_notifier.notify_info(
@@ -130,7 +130,7 @@ def run_macd_trend():
                     entry_price=current_price,
                     stop_loss=0.0,  # Pure SAR system
                     take_profit=0.0,
-                    comment="XAGI1_SHORT"
+                    comment="XAUUSD-i1-S-v2"
                 )
                 if res.get("success"):
                     telegram_notifier.notify_info(

@@ -51,6 +51,7 @@ def run_gi2_prelondon_long_entry():
     try:
         import MetaTrader5 as mt5
         from engine import broker_executor, telegram_notifier
+        from engine.db import log_trade_to_db
 
         mt5.initialize()
         tick = mt5.symbol_info_tick("XAUUSD")

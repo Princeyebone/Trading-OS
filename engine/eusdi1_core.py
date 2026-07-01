@@ -5,6 +5,7 @@ import numpy as np
 import MetaTrader5 as mt5
 
 from engine import broker_executor, telegram_notifier
+from engine.db import log_trade_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ def run_daily_breakout():
     If it breaks yesterday's low, sell (once per day).
     """
     try:
-        logger.info("[EUSDI1] Daily Breakout cycle starting...")
+        logger.info("[EURUSD-i1] Daily Breakout cycle starting...")
         if not broker_executor._init_mt5():
             return
             
@@ -123,9 +124,20 @@ def run_daily_breakout():
                         entry_price=current_ask,
                         stop_loss=current_ask - (SL_PIPS * 0.0001),
                         take_profit=current_ask + (TP_PIPS * 0.0001),
-                        comment="EUSDI1_LONG"
+                        comment="EURUSD-i1-L-v2"
                     )
                     if res.get("success"):
+                        log_trade_to_db(
+                            system="EUSDI1",
+                            direction=direction,
+                            symbol="EURUSD",
+                            actual_entry=(res.get("actual_entry") or 0.0),
+                            stop_loss=sl_price if 'sl_price' in dir() else 0.0,
+                            take_profit=tp_price if 'tp_price' in dir() else 0.0,
+                            lot_size=0.10,
+                            broker_order_id=str(res.get("order_id", "")),
+                            timeframe="M15",
+                        )
                         telegram_notifier.notify_info(
                             "EUSDI1 Bullish Breakout Triggered",
                             f"LONG {SYMBOL} @ {res.get('actual_entry', current_ask):.5f}\n"
@@ -148,9 +160,20 @@ def run_daily_breakout():
                         entry_price=current_bid,
                         stop_loss=current_bid + (SL_PIPS * 0.0001),
                         take_profit=current_bid - (TP_PIPS * 0.0001),
-                        comment="EUSDI1_SHORT"
+                        comment="EURUSD-i1-S-v2"
                     )
                     if res.get("success"):
+                        log_trade_to_db(
+                            system="EUSDI1",
+                            direction=direction,
+                            symbol="EURUSD",
+                            actual_entry=(res.get("actual_entry") or 0.0),
+                            stop_loss=sl_price if 'sl_price' in dir() else 0.0,
+                            take_profit=tp_price if 'tp_price' in dir() else 0.0,
+                            lot_size=0.10,
+                            broker_order_id=str(res.get("order_id", "")),
+                            timeframe="M15",
+                        )
                         telegram_notifier.notify_info(
                             "EUSDI1 Bearish Breakout Triggered",
                             f"SHORT {SYMBOL} @ {res.get('actual_entry', current_bid):.5f}\n"

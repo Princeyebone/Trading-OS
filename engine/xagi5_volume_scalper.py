@@ -96,15 +96,27 @@ class Xagi5VolumeScalper:
         
         return new_signals, has_volume
     
+    def _has_open_trade(self) -> bool:
+        """Check if we already have an open XAGI5 trade."""
+        positions = mt5.positions_get(symbol="XAUUSD")
+        if positions:
+            for p in positions:
+                if p.magic == MAGIC_NUMBER:
+                    return True
+        return False
+        
     def check_and_execute(self, config):
         """Check for new signals and execute them."""
+        if self._has_open_trade():
+            return []
+            
         new_signals, has_volume = self.scan_m5()
         
         if not new_signals:
             return []
             
         if not has_volume:
-            logger.info("[XAGI5] Skipping M5 execution: Low Volume Chop (Ratio < 1.2)")
+            logger.info("[XAUUSD-i5] Skipping M5 execution: Low Volume Chop (Ratio < 1.2)")
             return []
         
         executed = []
@@ -127,13 +139,16 @@ class Xagi5VolumeScalper:
         
     def check_and_execute_m1(self, config):
         """Check for new M1 signals and execute them."""
+        if self._has_open_trade():
+            return []
+            
         new_signals, has_volume = self.scan_m1()
         
         if not new_signals:
             return []
             
         if not has_volume:
-            logger.info("[XAGI5] Skipping M1 execution: Low Volume Chop (Ratio < 1.2)")
+            logger.info("[XAUUSD-i5] Skipping M1 execution: Low Volume Chop (Ratio < 1.2)")
             return []
             
         executed = []
@@ -175,7 +190,7 @@ class Xagi5VolumeScalper:
         
         session_db = get_session()
         
-        logger.info(f"[XAGI5] EXECUTION: {direction} {lot_size} lots @ ~{entry} (Type={signal['type']})")
+        logger.info(f"[XAUUSD-i5] EXECUTION: {direction} {lot_size} lots @ ~{entry} (Type={signal['type']})")
         
         order_result = broker_executor.place_order(
             direction=direction,
@@ -184,12 +199,12 @@ class Xagi5VolumeScalper:
             stop_loss=sl,
             take_profit=0.0, 
             magic=MAGIC_NUMBER,
-            comment="XAGI5-VolScalp",
+            comment="XAUUSD-i5-v2",
             symbol="XAUUSD"
         )
         
         if not order_result.get("success"):
-            logger.error(f"[XAGI5] Order failed: {order_result.get('error')}")
+            logger.error(f"[XAUUSD-i5] Order failed: {order_result.get('error')}")
             session_db.close()
             return None, None, None
             

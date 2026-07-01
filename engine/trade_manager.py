@@ -39,10 +39,12 @@ def sweep_orphans(session):
     mt5_positions = mt5.positions_get()
     if not mt5_positions:
         return
+
+    live_tickets = {str(p.ticket): p for p in mt5_positions}
         
     for p in mt5_positions:
-        ticket = p.ticket
-        existing = session.exec(select(Trade).where(Trade.broker_order_id == str(ticket))).first()
+        ticket = str(p.ticket)
+        existing = session.exec(select(Trade).where(Trade.broker_order_id == ticket)).first()
         if not existing:
             logger.warning(f"Orphan Sweeper: Found untracked MT5 position {ticket} (Magic {p.magic}). Adopting...")
             direction = "LONG" if p.type == mt5.POSITION_TYPE_BUY else "SHORT"
@@ -55,7 +57,7 @@ def sweep_orphans(session):
                 take_profit_1=p.tp if p.tp > 0 else (entry_price + 50.0 if direction=="LONG" else entry_price - 50.0),
                 lot_size=p.volume,
                 status="OPEN",
-                broker_order_id=str(ticket),
+                broker_order_id=ticket,
                 broker="MT5",
                 highest_profit_pips=0.0,
                 locked_profit_pips=0.0
@@ -63,6 +65,15 @@ def sweep_orphans(session):
             session.add(new_trade)
             session.commit()
             logger.info(f"Orphan Sweeper: Successfully adopted Trade #{new_trade.id} into DB.")
+        elif existing.status in ("CANCELLED", "LOSS", "WIN"):
+            # Trade was incorrectly closed in DB but position is still live in MT5 — resurrect it
+            logger.warning(f"Orphan Sweeper: Trade #{existing.id} (ticket {ticket}) is '{existing.status}' in DB but LIVE in MT5 with ${p.profit:.2f} profit. Resurrecting...")
+            existing.status = "OPEN"
+            existing.actual_entry = existing.actual_entry or p.price_open
+            existing.closed_at = None
+            session.add(existing)
+            session.commit()
+            logger.info(f"Orphan Sweeper: Trade #{existing.id} resurrected to OPEN.")
 
 def manage_open_trades():
     """
@@ -83,20 +94,36 @@ def manage_open_trades():
             
         sweep_orphans(session)
             
-        tick = mt5.symbol_info_tick(broker_executor.SYMBOL)
-        if not tick:
-            logger.error(f"Trade Manager: Could not get tick for {broker_executor.SYMBOL}")
-            return
-            
-        live_bid = tick.bid
-        live_ask = tick.ask
-        
         for trade in open_trades:
             if not trade.broker_order_id:
                 continue
                 
             entry = trade.actual_entry or trade.planned_entry
             ticket = int(trade.broker_order_id)
+            from app.models.signals import Signal
+
+            # ── System name resolution: DB signal → MT5 comment → magic number map ──
+            _MAGIC_MAP = {
+                202600: "XAGI1",  202601: "XAGI1-Swing",
+                202602: "XAGI2",  202603: "XAGI3",
+                202604: "XAGI4",  202700: "XAGI3",
+                202800: "XAGI5",  202900: "XAGI6",
+                203000: "EUSDI6", 203100: "EUSDI7",
+                203200: "GI2",    203300: "GI3",
+            }
+            sig = session.get(Signal, trade.signal_id) if trade.signal_id else None
+            sys_num = sig.session if (sig and sig.session) else None
+            if not sys_num:
+                # Try to derive from MT5 position comment or magic
+                _mt5_pos_temp = mt5.positions_get(ticket=ticket)
+                if _mt5_pos_temp:
+                    pos_comment = _mt5_pos_temp[0].comment or ""
+                    magic = _mt5_pos_temp[0].magic
+                    # Comment format is e.g. "EURUSD-i7" or "XAUUSD-i1-Core"
+                    if pos_comment:
+                        sys_num = pos_comment.replace("XAUUSD-", "XAGI").replace("EURUSD-", "EUSDI").replace("XAGUSD-", "XAGI").split("-")[0]
+                    if not sys_num or sys_num == pos_comment:
+                        sys_num = _MAGIC_MAP.get(magic, f"Magic#{magic}")
             
             # Fetch MT5 position to ensure it's still open
             mt5_pos = mt5.positions_get(ticket=ticket)
@@ -107,8 +134,15 @@ def manage_open_trades():
                     if mt5_order:
                         order_price = mt5_order[0].price_open
                         magic = mt5_order[0].magic
+                        trade_symbol = mt5_order[0].symbol
+                        tick = mt5.symbol_info_tick(trade_symbol)
+                        if not tick: continue
+                        live_bid, live_ask = tick.bid, tick.ask
+                        point = mt5.symbol_info(trade_symbol).point
+                        pip_multiplier = 1.0 / (point * 10.0) if point else 10.0
+                        
                         current_price = live_ask if trade.direction == "LONG" else live_bid
-                        dist_pips = abs(current_price - order_price) * 10.0
+                        dist_pips = abs(current_price - order_price) * pip_multiplier
                         import time
                         now = time.time()
                         if now - _last_log_time.get(f"{trade.id}_pending", 0) >= 5.0:
@@ -142,9 +176,20 @@ def manage_open_trades():
                         lot_size=trade.lot_size,
                         confidence=100,
                         order_id=trade.broker_order_id,
-                        reasoning=f"{strat_name} Limit Order Filled"
+                        reasoning=f"{strat_name} Limit Order Filled",
+                        symbol=mt5_pos[0].symbol,
+                        system=sig.session if (sig := session.get(Signal, trade.signal_id)) else "Unknown"
                     )
                 
+            # Dynamic Symbol Tick Fetching for OPEN trades
+            trade_symbol = mt5_pos[0].symbol
+            tick = mt5.symbol_info_tick(trade_symbol)
+            if not tick:
+                continue
+            live_bid, live_ask = tick.bid, tick.ask
+            point = mt5.symbol_info(trade_symbol).point
+            pip_multiplier = 1.0 / (point * 10.0) if point else 10.0
+            
             # Skip tight ratcheting TP for Macro Swing trades
             if mt5_pos[0].magic == 202601:
                 continue
@@ -156,9 +201,9 @@ def manage_open_trades():
                 
                 # Calculate live profit in pips
                 if trade.direction == "LONG":
-                    profit_pips = (live_bid - entry) * 10
+                    profit_pips = (live_bid - entry) * pip_multiplier
                 else:
-                    profit_pips = (entry - live_ask) * 10
+                    profit_pips = (entry - live_ask) * pip_multiplier
                     
                 dirty = False
                 if profit_pips > trade.highest_profit_pips:
@@ -173,12 +218,12 @@ def manage_open_trades():
                         dirty = True
                         
                         # Move SL natively
-                        new_sl = entry + (locked_pips / 10.0) if trade.direction == "LONG" else entry - (locked_pips / 10.0)
+                        new_sl = entry + (locked_pips / pip_multiplier) if trade.direction == "LONG" else entry - (locked_pips / pip_multiplier)
                         broker_executor.modify_position_sl(ticket, new_sl)
                         logger.info(f"🚀 FVG Sniper Trailing SL moved to +{locked_pips:.1f} pips")
                         if locked_pips >= _last_notified_lock.get(trade.id, 0) + 10.0:
                             dollar_val = locked_pips * (trade.lot_size * 10.0)
-                            telegram_notifier.notify_info("FVG Sniper Locked", f"🚀 Trade #{trade.id} LOCKED +{locked_pips:.1f} pips (+${dollar_val:.2f})")
+                            telegram_notifier.notify_info(f"[{trade_symbol} | Sys #{sys_num}] FVG Sniper Locked", f"🚀 Trade #{trade.id} (Ticket #{ticket}) LOCKED +{locked_pips:.1f} pips (+${dollar_val:.2f})")
                             _last_notified_lock[trade.id] = locked_pips
                 
                 # Hard close if it reverses past the lock
@@ -188,14 +233,14 @@ def manage_open_trades():
                     dirty = True
                     if success:
                         dollar_val = trade.locked_profit_pips * (trade.lot_size * 10.0)
-                        telegram_notifier.notify_success("FVG Sniper Closed", f"🎯 Trade #{trade.id} closed at +{trade.locked_profit_pips:.1f} pips (+${dollar_val:.2f})!")
+                        telegram_notifier.notify_success(f"[{trade_symbol} | Sys #{sys_num}] FVG Sniper Closed", f"🎯 Trade #{trade.id} (Ticket #{ticket}) closed at +{trade.locked_profit_pips:.1f} pips (+${dollar_val:.2f})!")
                         if trade.id in _last_notified_lock: del _last_notified_lock[trade.id]
                     
                 if dirty:
                     session.add(trade)
                     session.commit()
                     
-                logger.info(f"📈 [M15 FVG Sniper Monitor] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 30 pips)")
+                logger.info(f"📈 [{trade_symbol} | Sys #{sys_num} | Ticket #{ticket}] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 30 pips)")
                 continue
 
             # M5 Momentum Runner Trailing Logic (Magic 202603)
@@ -205,9 +250,9 @@ def manage_open_trades():
                 
                 # Calculate live profit in pips
                 if trade.direction == "LONG":
-                    profit_pips = (live_bid - entry) * 10
+                    profit_pips = (live_bid - entry) * pip_multiplier
                 else:
-                    profit_pips = (entry - live_ask) * 10
+                    profit_pips = (entry - live_ask) * pip_multiplier
                     
                 dirty = False
                 if profit_pips > trade.highest_profit_pips:
@@ -222,12 +267,12 @@ def manage_open_trades():
                         dirty = True
                         
                         # Move SL natively
-                        new_sl = entry + (locked_pips / 10.0) if trade.direction == "LONG" else entry - (locked_pips / 10.0)
+                        new_sl = entry + (locked_pips / pip_multiplier) if trade.direction == "LONG" else entry - (locked_pips / pip_multiplier)
                         broker_executor.modify_position_sl(ticket, new_sl)
                         logger.info(f"🚀 M5 Runner Trailing SL moved to +{locked_pips:.1f} pips")
                         if locked_pips >= _last_notified_lock.get(trade.id, 0) + 10.0:
                             dollar_val = locked_pips * (trade.lot_size * 10.0)
-                            telegram_notifier.notify_info("M5 Runner Locked", f"🚀 Trade #{trade.id} LOCKED +{locked_pips:.1f} pips (+${dollar_val:.2f})")
+                            telegram_notifier.notify_info(f"[{trade_symbol} | Sys #{sys_num}] M5 Runner Locked", f"🚀 Trade #{trade.id} (Ticket #{ticket}) LOCKED +{locked_pips:.1f} pips (+${dollar_val:.2f})")
                             _last_notified_lock[trade.id] = locked_pips
                 
                 # Hard close if it reverses past the lock
@@ -237,14 +282,14 @@ def manage_open_trades():
                     dirty = True
                     if success:
                         dollar_val = trade.locked_profit_pips * (trade.lot_size * 10.0)
-                        telegram_notifier.notify_success("M5 Runner Closed", f"🎯 Trade #{trade.id} closed at +{trade.locked_profit_pips:.1f} pips (+${dollar_val:.2f})!")
+                        telegram_notifier.notify_success(f"[{trade_symbol} | Sys #{sys_num}] M5 Runner Closed", f"🎯 Trade #{trade.id} (Ticket #{ticket}) closed at +{trade.locked_profit_pips:.1f} pips (+${dollar_val:.2f})!")
                         if trade.id in _last_notified_lock: del _last_notified_lock[trade.id]
                     
                 if dirty:
                     session.add(trade)
                     session.commit()
                     
-                logger.info(f"📈 [M5 Runner Monitor] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 20 pips)")
+                logger.info(f"📈 [{trade_symbol} | Sys #{sys_num} | Ticket #{ticket}] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 20 pips)")
                 continue
 
             # XAGI4 Trend Scalper Logic (Magic 202800)
@@ -253,16 +298,16 @@ def manage_open_trades():
                     trade_age_mins = (datetime.now(timezone.utc) - trade.opened_at.replace(tzinfo=timezone.utc)).total_seconds() / 60.0
                     
                     if trade.direction == "LONG":
-                        profit_pips = (live_bid - entry) * 10
+                        profit_pips = (live_bid - entry) * pip_multiplier
                     else:
-                        profit_pips = (entry - live_ask) * 10
+                        profit_pips = (entry - live_ask) * pip_multiplier
                     
                     # 20-Minute Forced Close Rule
                     if trade_age_mins > 20 and profit_pips < 0:
-                        logger.info(f"⏰ [XAGI4] Trade #{trade.id} aged {trade_age_mins:.1f} mins and is negative ({profit_pips:.1f} pips). Force Closing!")
+                        logger.info(f"⏰ [XAUUSD-i4] Trade #{trade.id} aged {trade_age_mins:.1f} mins and is negative ({profit_pips:.1f} pips). Force Closing!")
                         success = broker_executor.close_position(ticket)
                         if success:
-                            telegram_notifier.notify_success("XAGI4 Force Close", f"⏰ Trade #{trade.id} Force Closed after 20 mins to prevent trend drag. Loss: {profit_pips:.1f} pips.")
+                            telegram_notifier.notify_success(f"[{trade_symbol} | Sys #{sys_num}] Force Close", f"⏰ Trade #{trade.id} (Ticket #{ticket}) Force Closed after 20 mins to prevent trend drag. Loss: {profit_pips:.1f} pips.")
                         continue
                 # If not forced closed, let it fall through to the generic Step TP logic
 
@@ -273,9 +318,9 @@ def manage_open_trades():
                 
                 # Calculate live profit in pips
                 if trade.direction == "LONG":
-                    profit_pips = (live_bid - entry) * 10
+                    profit_pips = (live_bid - entry) * pip_multiplier
                 else:
-                    profit_pips = (entry - live_ask) * 10
+                    profit_pips = (entry - live_ask) * pip_multiplier
                     
                 dirty = False
                 if profit_pips > trade.highest_profit_pips:
@@ -290,12 +335,12 @@ def manage_open_trades():
                         dirty = True
                         
                         # Move SL natively
-                        new_sl = entry + (locked_pips / 10.0) if trade.direction == "LONG" else entry - (locked_pips / 10.0)
+                        new_sl = entry + (locked_pips / pip_multiplier) if trade.direction == "LONG" else entry - (locked_pips / pip_multiplier)
                         broker_executor.modify_position_sl(ticket, new_sl)
                         logger.info(f"🚀 M15 Momentum Sibling Trailing SL moved to +{locked_pips:.1f} pips")
                         if locked_pips >= _last_notified_lock.get(trade.id, 0) + 10.0:
                             dollar_val = locked_pips * (trade.lot_size * 10.0)
-                            telegram_notifier.notify_info("M15 Runner Locked", f"🚀 Trade #{trade.id} LOCKED +{locked_pips:.1f} pips (+${dollar_val:.2f})")
+                            telegram_notifier.notify_info(f"[{trade_symbol} | Sys #{sys_num}] M15 Runner Locked", f"🚀 Trade #{trade.id} (Ticket #{ticket}) LOCKED +{locked_pips:.1f} pips (+${dollar_val:.2f})")
                             _last_notified_lock[trade.id] = locked_pips
                 
                 # Hard close if it reverses past the lock
@@ -305,41 +350,41 @@ def manage_open_trades():
                     dirty = True
                     if success:
                         dollar_val = trade.locked_profit_pips * (trade.lot_size * 10.0)
-                        telegram_notifier.notify_success("M15 Runner Closed", f"🎯 Trade #{trade.id} closed at +{trade.locked_profit_pips:.1f} pips (+${dollar_val:.2f})!")
+                        telegram_notifier.notify_success(f"[{trade_symbol} | Sys #{sys_num}] M15 Runner Closed", f"🎯 Trade #{trade.id} (Ticket #{ticket}) closed at +{trade.locked_profit_pips:.1f} pips (+${dollar_val:.2f})!")
                         if trade.id in _last_notified_lock: del _last_notified_lock[trade.id]
                     
                 if dirty:
                     session.add(trade)
                     session.commit()
                     
-                logger.info(f"📈 [M15 Momentum Monitor] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 30 pips)")
+                logger.info(f"📈 [{trade_symbol} | Sys #{sys_num} | Ticket #{ticket}] Trade #{trade.id}: ACTIVE: PnL {profit_pips:+.1f} pips | Trail Lock = +{trade.locked_profit_pips:.1f} pips | Target = Open (Trail 30 pips)")
                 continue
                 
             # Determine Lock Configuration based on Signal
             if trade.signal_id:
                 from app.models.signals import Signal
                 sig = session.get(Signal, trade.signal_id)
-                if sig and sig.session == "SCALP":
-                    start_lock_pips = 10.0
+                if sig and sig.session == "SCALP" or sig.session in ["XAGI4", "XAGI5"]:
+                    start_lock_pips = 20.0
                     step_gain_pips = 10.0
                     step_lock_pips = 10.0
                 else:
-                    start_lock_pips = 10.0
-                    step_gain_pips = 20.0
-                    step_lock_pips = 20.0
+                    start_lock_pips = 20.0
+                    step_gain_pips = 10.0
+                    step_lock_pips = 10.0
             else:
-                start_lock_pips = 10.0
-                step_gain_pips = 20.0
-                step_lock_pips = 20.0
+                start_lock_pips = 20.0
+                step_gain_pips = 10.0
+                step_lock_pips = 10.0
                 
             # Calculate live profit in pips
             if trade.direction == "LONG":
-                profit_pips = (live_bid - entry) * 10
+                profit_pips = (live_bid - entry) * pip_multiplier
             else:
-                profit_pips = (entry - live_ask) * 10
+                profit_pips = (entry - live_ask) * pip_multiplier
                 
-            trade_type = "SCALP" if step_gain_pips == 10.0 else "TCP"
-            logger.info(f"📊 [Step TP Monitor] Trade #{trade.id} ({trade_type}): ACTIVE: PnL {profit_pips:+.1f} pips | Locked = {trade.locked_profit_pips:.1f} pips")
+            trade_type = "SCALP" if step_gain_pips == 10.0 and trade.signal_id else "TCP"
+            logger.info(f"📊 [{trade_symbol} | Sys #{sys_num} | Ticket #{ticket}] Trade #{trade.id} ({trade_type}): ACTIVE: PnL {profit_pips:+.1f} pips | Locked = {trade.locked_profit_pips:.1f} pips")
                 
             # Update highest profit
             dirty = False
@@ -375,14 +420,14 @@ def manage_open_trades():
                 
                 # Debounce Telegram (only notify every 10 pips)
                 if new_lock >= _last_notified_lock.get(trade.id, 0) + 10.0:
-                    telegram_notifier.notify_info("Step TP", f"🔒 Trade #{trade.id} (Ticket #{ticket}) LOCKED +{trade.locked_profit_pips:.1f} pips")
+                    telegram_notifier.notify_info(f"[{trade_symbol} | Sys #{sys_num}] Step TP", f"🔒 Trade #{trade.id} (Ticket #{ticket}) LOCKED +{trade.locked_profit_pips:.1f} pips")
                     _last_notified_lock[trade.id] = new_lock
                 
                 # Optionally move SL natively to protect MT5 state if server dies
                 # (Break-even + locked profit - buffer)
                 protect_pips = trade.locked_profit_pips - (step_gain_pips * 0.5)
                 if protect_pips >= 0:
-                    new_sl = entry + (protect_pips / 10.0) if trade.direction == "LONG" else entry - (protect_pips / 10.0)
+                    new_sl = entry + (protect_pips / pip_multiplier) if trade.direction == "LONG" else entry - (protect_pips / pip_multiplier)
                     broker_executor.modify_position_sl(ticket, new_sl)
             
             # 2. Check for Reversal (Close Condition)
@@ -391,7 +436,7 @@ def manage_open_trades():
                 success = broker_executor.close_position(ticket)
                 if success:
                     dirty = True
-                    telegram_notifier.notify_success("Step TP Hit", f"🎯 Trade #{trade.id} (Ticket #{ticket}) closed at +{trade.locked_profit_pips:.1f} pips!")
+                    telegram_notifier.notify_success(f"[{trade_symbol} | Sys #{sys_num}] Step TP Hit", f"🎯 Trade #{trade.id} (Ticket #{ticket}) closed at +{trade.locked_profit_pips:.1f} pips!")
                     if trade.id in _last_notified_lock:
                         del _last_notified_lock[trade.id]
             

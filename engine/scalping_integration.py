@@ -20,7 +20,7 @@ class ScalpingIntegration:
         m5_data = fetch_ohlcv("M5", use_cache=False)
         if m5_data is None or len(m5_data) < 100:
             logger.warning("Insufficient M5 data for scalping")
-            return [], "UNKNOWN"
+            return [], "UNKNOWN", "UNKNOWN"
             
         m15_data = fetch_ohlcv("M15", use_cache=True)
         m15_trend = "UNKNOWN"
@@ -91,8 +91,25 @@ class ScalpingIntegration:
             logger.info(f"Scan M1 complete: 0 hyper-scalps found at price {c_price:.2f}. Monitoring...")
         return new_signals, h4_trend, m15_trend
     
+    def _has_open_trade(self) -> bool:
+        """Check if there is already an open XAUUSD trade for this system."""
+        import MetaTrader5 as mt5
+        positions = mt5.positions_get(symbol="XAUUSD")
+        if positions is None:
+            return False
+            
+        for p in positions:
+            # We treat any open XAUUSD trade as a block for the scalper
+            return True
+            
+        return False
+        
     def check_and_execute(self, config):
         """Check for new signals and execute them."""
+        if self._has_open_trade():
+            # Silently skip scanning to save resources if we already have a trade open
+            return []
+            
         new_signals, h4_trend, m15_trend = self.scan_m5()
         
         if not new_signals:
@@ -133,6 +150,9 @@ class ScalpingIntegration:
         
     def check_and_execute_m1(self, config):
         """Check for new M1 signals and execute them."""
+        if self._has_open_trade():
+            return []
+            
         new_signals, h4_trend, m15_trend = self.scan_m1()
         
         if not new_signals:
@@ -238,6 +258,7 @@ class ScalpingIntegration:
             entry_price=entry,
             stop_loss=sl,
             take_profit=0.0, # TP is managed by Step-Trailing system
+            comment="XAUUSD-i1-Core",
         )
         
         if not order_result["success"]:

@@ -82,19 +82,25 @@ def place_order(
 
         price = tick.ask if direction == "LONG" else tick.bid
 
+        filling_mode = mt5.ORDER_FILLING_IOC
+        if tick and mt5.symbol_info(symbol):
+            allowed_modes = mt5.symbol_info(symbol).filling_mode
+            if allowed_modes == 1:
+                filling_mode = mt5.ORDER_FILLING_FOK
+
         request = {
             "action": action,
             "symbol": symbol,
             "volume": lot_size,
             "type": order_type,
-            "price": round(price, 2),
-            "sl": round(stop_loss, 2) if stop_loss > 0 else 0.0,
-            "tp": round(take_profit, 2) if take_profit > 0 else 0.0,
+            "price": round(price, 5),
+            "sl": round(stop_loss, 5) if stop_loss > 0 else 0.0,
+            "tp": round(take_profit, 5) if take_profit > 0 else 0.0,
             "deviation": 20,
             "magic": magic,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling_mode,
         }
 
         result = mt5.order_send(request)
@@ -146,19 +152,25 @@ def place_limit_order(
         action = mt5.TRADE_ACTION_PENDING
         order_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == "LONG" else mt5.ORDER_TYPE_SELL_LIMIT
         
+        filling_mode = mt5.ORDER_FILLING_IOC
+        if mt5.symbol_info(symbol):
+            allowed_modes = mt5.symbol_info(symbol).filling_mode
+            if allowed_modes == 1:
+                filling_mode = mt5.ORDER_FILLING_FOK
+                
         request = {
             "action": action,
             "symbol": symbol,
             "volume": lot_size,
             "type": order_type,
-            "price": round(entry_price, 2),
-            "sl": round(stop_loss, 2) if stop_loss > 0 else 0.0,
-            "tp": round(take_profit, 2) if take_profit > 0 else 0.0,
+            "price": round(entry_price, 5),
+            "sl": round(stop_loss, 5) if stop_loss > 0 else 0.0,
+            "tp": round(take_profit, 5) if take_profit > 0 else 0.0,
             "deviation": 20,
             "magic": magic,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling_mode,
         }
         
         result = mt5.order_send(request)
@@ -234,9 +246,17 @@ def close_position(ticket: int, symbol: str = 'XAUUSD') -> bool:
         if not position:
             return False
         pos = position[0]
+        # Dynamically use the real symbol from the position
+        symbol = pos.symbol
         order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
         tick = mt5.symbol_info_tick(symbol)
         price = tick.bid if pos.type == 0 else tick.ask
+        
+        filling_mode = mt5.ORDER_FILLING_IOC
+        if tick and mt5.symbol_info(symbol):
+            allowed_modes = mt5.symbol_info(symbol).filling_mode
+            if allowed_modes == 1:
+                filling_mode = mt5.ORDER_FILLING_FOK
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -249,7 +269,7 @@ def close_position(ticket: int, symbol: str = 'XAUUSD') -> bool:
             "magic": 202600,
             "comment": "TradingOS-close",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling_mode,
         }
         result = mt5.order_send(request)
         return result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
@@ -270,12 +290,17 @@ def modify_position_sl(ticket: int, new_sl: float, symbol: str = 'XAUUSD') -> bo
         position = mt5.positions_get(ticket=ticket)
         if not position: return False
         pos = position[0]
+        symbol = pos.symbol
+        digits = 2
+        sinfo = mt5.symbol_info(symbol)
+        if sinfo:
+            digits = sinfo.digits
         
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "position": ticket,
             "symbol": symbol,
-            "sl": round(new_sl, 2),
+            "sl": round(new_sl, digits),
             "tp": pos.tp,
             "magic": 202600
         }

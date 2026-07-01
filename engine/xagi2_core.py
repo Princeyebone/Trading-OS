@@ -80,7 +80,7 @@ def run_ema_trend():
     Evaluated hourly.
     """
     try:
-        logger.info("[XAGI2-EMA] Cycle starting...")
+        logger.info("[XAGUSD-i2] Cycle starting...")
         if not broker_executor._init_mt5():
             return
             
@@ -106,7 +106,7 @@ def run_ema_trend():
                     entry_price=current_price,
                     stop_loss=0.0,  # Pure SAR system
                     take_profit=0.0,
-                    comment="XAGI2_LONG"
+                    comment="XAUUSD-i2-L-v2"
                 )
                 if res.get("success"):
                     telegram_notifier.notify_info(
@@ -132,7 +132,7 @@ def run_ema_trend():
                     entry_price=current_price,
                     stop_loss=0.0,  # Pure SAR system
                     take_profit=0.0,
-                    comment="XAGI2_SHORT"
+                    comment="XAUUSD-i2-S-v2"
                 )
                 if res.get("success"):
                     telegram_notifier.notify_info(

@@ -107,7 +107,7 @@ class Xagi4TrendScalper:
             return []
             
         if self._has_open_trade():
-            logger.info("[XAGI4] Skipping M5 execution: Max open trades (1) reached.")
+            logger.info("[XAUUSD-i4] Skipping M5 execution: Max open trades (1) reached.")
             return []
         
         executed = []
@@ -117,10 +117,10 @@ class Xagi4TrendScalper:
                 
             # ── HARD H1 TREND FILTER ──
             if signal['direction'] == 'BULLISH' and h1_trend == 'BEARISH':
-                logger.info(f"[XAGI4] Blocked LONG in BEARISH H1 trend.")
+                logger.info(f"[XAUUSD-i4] Blocked LONG in BEARISH H1 trend.")
                 continue
             if signal['direction'] == 'BEARISH' and h1_trend == 'BULLISH':
-                logger.info(f"[XAGI4] Blocked SHORT in BULLISH H1 trend.")
+                logger.info(f"[XAUUSD-i4] Blocked SHORT in BULLISH H1 trend.")
                 continue
                 
             if self._is_duplicate(signal, lockout_seconds=1800):
@@ -145,7 +145,7 @@ class Xagi4TrendScalper:
             return []
             
         if self._has_open_trade():
-            logger.info("[XAGI4] Skipping M1 execution: Max open trades (1) reached.")
+            logger.info("[XAUUSD-i4] Skipping M1 execution: Max open trades (1) reached.")
             return []
             
         executed = []
@@ -155,10 +155,10 @@ class Xagi4TrendScalper:
                 
             # ── HARD H1 TREND FILTER ──
             if signal['direction'] == 'BULLISH' and h1_trend == 'BEARISH':
-                logger.info(f"[XAGI4] Blocked LONG M1 in BEARISH H1 trend.")
+                logger.info(f"[XAUUSD-i4] Blocked LONG M1 in BEARISH H1 trend.")
                 continue
             if signal['direction'] == 'BEARISH' and h1_trend == 'BULLISH':
-                logger.info(f"[XAGI4] Blocked SHORT M1 in BULLISH H1 trend.")
+                logger.info(f"[XAUUSD-i4] Blocked SHORT M1 in BULLISH H1 trend.")
                 continue
                     
             if self._is_duplicate(signal, lockout_seconds=900): # 15 min lockout for M1
@@ -196,7 +196,7 @@ class Xagi4TrendScalper:
         
         session_db = get_session()
         
-        logger.info(f"[XAGI4] EXECUTION: {direction} {lot_size} lots @ ~{entry} (Type={signal['type']})")
+        logger.info(f"[XAUUSD-i4] EXECUTION: {direction} {lot_size} lots @ ~{entry} (Type={signal['type']})")
         
         order_result = broker_executor.place_order(
             direction=direction,
@@ -205,12 +205,12 @@ class Xagi4TrendScalper:
             stop_loss=sl,
             take_profit=0.0, 
             magic=MAGIC_NUMBER,
-            comment="XAGI4-Scalp",
+            comment="XAUUSD-i4-v2",
             symbol="XAUUSD"
         )
         
         if not order_result.get("success"):
-            logger.error(f"[XAGI4] Order failed: {order_result.get('error')}")
+            logger.error(f"[XAUUSD-i4] Order failed: {order_result.get('error')}")
             session_db.close()
             return None, None, None
             

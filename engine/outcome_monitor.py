@@ -27,12 +27,23 @@ def _compute_result(actual_profit: float) -> str:
     return "BE"
 
 
-def _compute_pnl(trade: Trade, exit_price: float, actual_profit: float) -> tuple[float, float]:
-    """Returns (pnl_pips, pnl_dollars)."""
+def _compute_pnl(trade: Trade, exit_price: float, actual_profit: float, symbol: str = "XAUUSD") -> tuple[float, float]:
+    """Returns (pnl_pips, pnl_dollars). Uses symbol-aware pip size."""
+    # Pip multiplier: XAUUSD point=0.01 -> pip=0.1 -> *10. EURUSD point=0.00001 -> pip=0.0001 -> *10000
+    try:
+        import MetaTrader5 as mt5
+        sinfo = mt5.symbol_info(symbol)
+        if sinfo and sinfo.point > 0:
+            pip_multiplier = 1.0 / (sinfo.point * 10.0)
+        else:
+            pip_multiplier = 10.0  # fallback for XAUUSD
+    except Exception:
+        pip_multiplier = 10.0
+
     if trade.direction == "LONG":
-        pips = (exit_price - trade.actual_entry) * 10 if trade.actual_entry else 0
+        pips = (exit_price - trade.actual_entry) * pip_multiplier if trade.actual_entry else 0
     else:
-        pips = (trade.actual_entry - exit_price) * 10 if trade.actual_entry else 0
+        pips = (trade.actual_entry - exit_price) * pip_multiplier if trade.actual_entry else 0
     
     return round(pips, 1), round(actual_profit, 2)
 
@@ -90,12 +101,12 @@ def check_and_close_trades():
             if trade.broker_order_id and trade.broker_order_id not in open_tickets:
                 # Find the position that closed — get exit price from broker history
                 # For now use the last known price (simplified)
-                exit_price, actual_profit = _get_exit_data_from_broker(trade)
+                exit_price, actual_profit, symbol = _get_exit_data_from_broker(trade)
                 if exit_price is None:
                     logger.warning(f"Cannot determine exit price for trade {trade.id}")
                     continue
 
-                _record_close(session, trade, exit_price, actual_profit)
+                _record_close(session, trade, exit_price, actual_profit, symbol)
 
     except Exception as e:
         logger.error(f"check_and_close_trades error: {e}")
@@ -104,14 +115,14 @@ def check_and_close_trades():
         session.close()
 
 
-def _get_exit_data_from_broker(trade: Trade) -> tuple[Optional[float], float]:
+def _get_exit_data_from_broker(trade: Trade) -> tuple[Optional[float], float, str]:
     """
     Retrieve the actual close price and exact broker profit from MT5 history.
     """
     try:
         import MetaTrader5 as mt5
         if not mt5.initialize():
-            return None, 0.0
+            return None, 0.0, "XAUUSD"
             
         deals = mt5.history_deals_get(position=int(trade.broker_order_id or 0))
         if deals:
@@ -122,16 +133,19 @@ def _get_exit_data_from_broker(trade: Trade) -> tuple[Optional[float], float]:
                     exit_price = float(d.price)
                     total_profit += float(d.profit)
             if exit_price is not None:
-                return exit_price, total_profit
+                return exit_price, total_profit, deals[0].symbol
     except Exception as e:
         logger.error(f"Error getting exit data for trade {trade.id}: {e}")
-    return None, 0.0
+    return None, 0.0, "XAUUSD"
 
 
-def _record_close(session: Session, trade: Trade, exit_price: float, actual_profit: float):
+def _record_close(session: Session, trade: Trade, exit_price: float, actual_profit: float, symbol: str):
     """Record trade close — outcome, journal, notifications."""
+    from app.models.signals import Signal
+    sig = session.get(Signal, trade.signal_id) if trade.signal_id else None
+    sys_num = sig.session if sig else "Unknown"
     result = _compute_result(actual_profit)
-    pnl_pips, pnl_dollars = _compute_pnl(trade, exit_price, actual_profit)
+    pnl_pips, pnl_dollars = _compute_pnl(trade, exit_price, actual_profit, symbol)
     r_achieved = _compute_r_achieved(trade, exit_price)
 
     # Determine exit reason
@@ -205,6 +219,8 @@ def _record_close(session: Session, trade: Trade, exit_price: float, actual_prof
         exit_reason=exit_reason,
         duration_mins=duration_mins,
         ticket=trade.broker_order_id,
+        symbol=symbol,
+        system=sys_num,
     )
 
-    logger.info(f"Trade {trade.id} closed: {result} | R={r_achieved} | P&L=${pnl_dollars}")
+    logger.info(f"[{symbol} | Sys #{sys_num}] Trade {trade.id} closed: {result} | R={r_achieved} | P&L=${pnl_dollars}")

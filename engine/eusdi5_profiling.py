@@ -85,7 +85,7 @@ def run_adr_exhaustion():
                 logger.info(f"[{SYMBOL}] EUSDI5 ADR Exhaustion reached ({today_range:.5f} >= {adr14:.5f}). Fading extreme High.")
                 res = broker_executor.place_order(
                     symbol=SYMBOL, direction="SHORT", lot_size=LOT_SIZE,
-                    entry_price=bid, stop_loss=sl_price, take_profit=tp_price, comment="EUSDI5_ADR_Short"
+                    entry_price=bid, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i5-AS-v2"
                 )
                 if res.get("success"):
                     telegram_notifier.notify_trade("EUSDI5 ADR Exhaustion", "SHORT", SYMBOL, bid, sl_price, tp_price, reason="100% ADR Reached")
@@ -97,7 +97,7 @@ def run_adr_exhaustion():
                 logger.info(f"[{SYMBOL}] EUSDI5 ADR Exhaustion reached ({today_range:.5f} >= {adr14:.5f}). Fading extreme Low.")
                 res = broker_executor.place_order(
                     symbol=SYMBOL, direction="LONG", lot_size=LOT_SIZE,
-                    entry_price=ask, stop_loss=sl_price, take_profit=tp_price, comment="EUSDI5_ADR_Long"
+                    entry_price=ask, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i5-AL-v2"
                 )
                 if res.get("success"):
                     telegram_notifier.notify_trade("EUSDI5 ADR Exhaustion", "LONG", SYMBOL, ask, sl_price, tp_price, reason="100% ADR Reached")
@@ -149,7 +149,7 @@ def run_asian_volatility_squeeze():
                 logger.info(f"[{SYMBOL}] EUSDI5 Massive Asian Squeeze detected. Trading London Breakout LONG.")
                 res = broker_executor.place_order(
                     symbol=SYMBOL, direction="LONG", lot_size=LOT_SIZE,
-                    entry_price=ask, stop_loss=sl_price, take_profit=tp_price, comment="EUSDI5_Sqz_Long"
+                    entry_price=ask, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i5-SL-v2"
                 )
                 if res.get("success"):
                     telegram_notifier.notify_trade("EUSDI5 Asian Squeeze Breakout", "LONG", SYMBOL, ask, sl_price, tp_price, reason="London Breakout following Asian Squeeze")
@@ -161,7 +161,7 @@ def run_asian_volatility_squeeze():
                 logger.info(f"[{SYMBOL}] EUSDI5 Massive Asian Squeeze detected. Trading London Breakout SHORT.")
                 res = broker_executor.place_order(
                     symbol=SYMBOL, direction="SHORT", lot_size=LOT_SIZE,
-                    entry_price=bid, stop_loss=sl_price, take_profit=tp_price, comment="EUSDI5_Sqz_Short"
+                    entry_price=bid, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i5-SS-v2"
                 )
                 if res.get("success"):
                     telegram_notifier.notify_trade("EUSDI5 Asian Squeeze Breakout", "SHORT", SYMBOL, bid, sl_price, tp_price, reason="London Breakout following Asian Squeeze")

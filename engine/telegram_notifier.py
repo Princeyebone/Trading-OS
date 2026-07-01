@@ -68,9 +68,11 @@ def notify_trade_executed(
     confidence: int,
     order_id: str,
     reasoning: str = "",
+    symbol: str = "XAUUSD",
+    system: str = "Unknown"
 ):
     msg = (
-        f"🟢 <b>TRADE EXECUTED — XAU/USD</b>\n"
+        f"🟢 <b>TRADE EXECUTED — {symbol}</b> [Sys #{system}]\n"
         f"{'🔼 LONG' if direction == 'LONG' else '🔽 SHORT'} | {lot_size} lots\n\n"
         f"📍 Entry:      <b>{entry}</b>\n"
         f"🛑 Stop Loss:  <b>{stop_loss}</b>\n"
@@ -94,13 +96,15 @@ def notify_trade_outcome(
     exit_reason: str,
     duration_mins: int,
     ticket: str = None,
+    symbol: str = "XAUUSD",
+    system: str = "Unknown"
 ):
     emoji = "✅" if result == "WIN" else ("❌" if result == "LOSS" else "⚖️")
     pnl_sign = "+" if pnl_dollars >= 0 else ""
     ticket_str = f" (Ticket #{ticket})" if ticket else ""
     msg = (
-        f"{emoji} <b>TRADE CLOSED — {result}</b>\n"
-        f"{'🔼 LONG' if direction == 'LONG' else '🔽 SHORT'} XAU/USD{ticket_str}\n\n"
+        f"{emoji} <b>TRADE CLOSED — {result}</b> | {symbol} [Sys #{system}]\n"
+        f"{'🔼 LONG' if direction == 'LONG' else '🔽 SHORT'} {ticket_str}\n\n"
         f"📍 Entry:    <b>{entry:.2f} → {exit_price:.2f}</b>\n"
         f"💰 P&L:     <b>{pnl_sign}${abs(pnl_dollars):.2f} ({pnl_sign}{abs(pnl_pips):.1f} pips)</b>\n"
         f"📊 R:       <b>{r_achieved:.2f}R</b>\n"

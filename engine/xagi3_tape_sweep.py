@@ -207,7 +207,7 @@ def _execute_trade(signal: dict) -> bool:
     """Place the XAGI3 market order and log it to the DB."""
     direction_mt5 = "LONG" if signal['direction'] == 'BULLISH' else "SHORT"
     logger.info(
-        f"[XAGI3] Placing {direction_mt5} | Entry ~{signal['entry']:.2f} | "
+        f"[XAUUSD-i3] Placing {direction_mt5} | Entry ~{signal['entry']:.2f} | "
         f"SL: {signal['sl']:.2f} ({signal['sl_dist']:.1f} pts) | TP: {signal['tp']:.2f} | "
         f"Level: {signal['level']:.2f} | Wick: {signal['wick_pct']}%"
     )
@@ -219,12 +219,12 @@ def _execute_trade(signal: dict) -> bool:
         stop_loss=signal['sl'],
         take_profit=signal['tp'],
         magic=MAGIC_NUMBER,
-        comment="XAGI3-TapeSweep",
+        comment="XAUUSD-i3-v2",
         symbol=SYMBOL,
     )
 
     if not result.get("success"):
-        logger.error(f"[XAGI3] Order failed: {result.get('error')}")
+        logger.error(f"[XAUUSD-i3] Order failed: {result.get('error')}")
         return False
 
     session_db = get_session()
@@ -258,9 +258,9 @@ def _execute_trade(signal: dict) -> bool:
         )
         session_db.add(trade)
         session_db.commit()
-        logger.info(f"[XAGI3] Trade #{trade.id} logged to DB.")
+        logger.info(f"[XAUUSD-i3] Trade #{trade.id} logged to DB.")
     except Exception as e:
-        logger.error(f"[XAGI3] DB logging failed: {e}")
+        logger.error(f"[XAUUSD-i3] DB logging failed: {e}")
     finally:
         session_db.close()
 
@@ -276,7 +276,9 @@ def _execute_trade(signal: dict) -> bool:
         reasoning=(
             f"XAGI3 Liquidity Sweep | Level {signal['level']:.2f} ({signal['level_type']}) | "
             f"Wick {signal['wick_pct']}% | SL {signal['sl_dist']:.1f} pts | RR 1:{TP_MULTIPLIER:.0f}"
-        )
+        ),
+        symbol=SYMBOL,
+        system="XAGI3"
     )
     return True
 
@@ -288,10 +290,10 @@ def run_xagi3_cycle():
     """
     global _bar_counter
 
-    logger.info("[XAGI3] Cycle starting...")
+    logger.info("[XAUUSD-i3] Cycle starting...")
 
     if not broker_executor._init_mt5():
-        logger.warning("[XAGI3] MT5 not initialized, skipping.")
+        logger.warning("[XAUUSD-i3] MT5 not initialized, skipping.")
         return
 
     # ── Session Gate ──
@@ -300,18 +302,18 @@ def run_xagi3_cycle():
         server_dt = datetime.fromtimestamp(server_info.time)
         hour = server_dt.hour
         if not (SESSION_START <= hour < SESSION_END):
-            logger.info(f"[XAGI3] Outside trading session ({hour:02d}:00 MT5 time). Sleeping.")
+            logger.info(f"[XAUUSD-i3] Outside trading session ({hour:02d}:00 MT5 time). Sleeping.")
             return
     
     # ── Position Gate ──
     if _has_active_xagi3_trade():
-        logger.info("[XAGI3] Active XAGI3 trade open. Skipping scan.")
+        logger.info("[XAUUSD-i3] Active XAGI3 trade open. Skipping scan.")
         return
 
     # ── Fetch Data ──
     m1_df = _fetch_m1_data()
     if m1_df is None or len(m1_df) < LOOKBACK_BARS + 5:
-        logger.warning("[XAGI3] Insufficient M1 data.")
+        logger.warning("[XAUUSD-i3] Insufficient M1 data.")
         return
 
     h1_df = _fetch_h1_data()
@@ -325,7 +327,7 @@ def run_xagi3_cycle():
     clusters = _build_liquidity_clusters(highs_map, lows_map)
 
     if not clusters:
-        logger.info("[XAGI3] No liquidity clusters found. Waiting...")
+        logger.info("[XAUUSD-i3] No liquidity clusters found. Waiting...")
         return
 
     # ── Get Latest Completed Candle ──
@@ -333,7 +335,7 @@ def run_xagi3_cycle():
     ts = m1_df.index[-2]
 
     logger.info(
-        f"[XAGI3] Scanning | H1 Trend: {h1_trend} | Price: {latest['close']:.2f} | "
+        f"[XAUUSD-i3] Scanning | H1 Trend: {h1_trend} | Price: {latest['close']:.2f} | "
         f"Clusters: {len(clusters)} | Bar: {ts.strftime('%H:%M')}"
     )
 
@@ -349,15 +351,15 @@ def run_xagi3_cycle():
             continue
 
         logger.info(
-            f"[XAGI3] SWEEP DETECTED on {level_type} @ {level_price:.2f} | "
+            f"[XAUUSD-i3] SWEEP DETECTED on {level_type} @ {level_price:.2f} | "
             f"Direction: {signal['direction']} | Wick: {signal['wick_pct']}%"
         )
         _level_cooldown[level_key] = _bar_counter
 
         success = _execute_trade(signal)
         if success:
-            logger.info(f"[XAGI3] Trade executed successfully!")
+            logger.info(f"[XAUUSD-i3] Trade executed successfully!")
         break  # One trade per cycle
 
     else:
-        logger.info("[XAGI3] No sweep signals this bar. Monitoring...")
+        logger.info("[XAUUSD-i3] No sweep signals this bar. Monitoring...")
