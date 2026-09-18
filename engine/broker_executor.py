@@ -308,6 +308,9 @@ def modify_position_sl(ticket: int, new_sl: float, symbol: str = 'XAUUSD') -> bo
         if result and result.retcode == mt5.TRADE_RETCODE_DONE:
             logger.info(f"Modified SL for #{ticket} to {round(new_sl, 2):.2f}")
             return True
+        elif result and result.retcode == 10025:  # TRADE_RETCODE_NO_CHANGES
+            logger.info(f"SL for #{ticket} is already at {round(new_sl, 2):.2f} (No changes)")
+            return True
         else:
             logger.error(f"Failed to modify SL for #{ticket}: {result.comment if result else 'Unknown'}")
             return False

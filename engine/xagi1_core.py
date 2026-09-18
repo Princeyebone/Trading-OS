@@ -2,8 +2,8 @@ import logging
 import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
-
 from engine import broker_executor, telegram_notifier
+from engine.db import log_trade_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +104,22 @@ def run_macd_trend():
                     entry_price=current_price,
                     stop_loss=0.0,  # Pure SAR system, no fixed SL/TP
                     take_profit=0.0,
-                    comment="XAUUSD-i1-L-v2"
+                    comment="XAGUSD-i1-L-v2",
+                    symbol=SYMBOL,
+                    magic=202600
                 )
                 if res.get("success"):
+                    log_trade_to_db(
+                        system="XAGI1",
+                        direction="LONG",
+                        symbol=SYMBOL,
+                        actual_entry=(res.get("actual_entry") or current_price),
+                        stop_loss=0.0,
+                        take_profit=0.0,
+                        lot_size=LOT_SIZE,
+                        broker_order_id=str(res.get("order_id", "")),
+                        timeframe="H1",
+                    )
                     telegram_notifier.notify_info(
                         "XAGI1 Bullish Trend Triggered",
                         f"LONG {SYMBOL} @ {res.get('actual_entry', current_price):.3f}\n"
@@ -130,9 +143,22 @@ def run_macd_trend():
                     entry_price=current_price,
                     stop_loss=0.0,  # Pure SAR system
                     take_profit=0.0,
-                    comment="XAUUSD-i1-S-v2"
+                    comment="XAGUSD-i1-S-v2",
+                    symbol=SYMBOL,
+                    magic=202600
                 )
                 if res.get("success"):
+                    log_trade_to_db(
+                        system="XAGI1",
+                        direction="SHORT",
+                        symbol=SYMBOL,
+                        actual_entry=(res.get("actual_entry") or current_price),
+                        stop_loss=0.0,
+                        take_profit=0.0,
+                        lot_size=LOT_SIZE,
+                        broker_order_id=str(res.get("order_id", "")),
+                        timeframe="H1",
+                    )
                     telegram_notifier.notify_info(
                         "XAGI1 Bearish Trend Triggered",
                         f"SHORT {SYMBOL} @ {res.get('actual_entry', current_price):.3f}\n"

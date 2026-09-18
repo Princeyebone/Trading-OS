@@ -143,7 +143,10 @@ def _record_close(session: Session, trade: Trade, exit_price: float, actual_prof
     """Record trade close — outcome, journal, notifications."""
     from app.models.signals import Signal
     sig = session.get(Signal, trade.signal_id) if trade.signal_id else None
-    sys_num = sig.session if sig else "Unknown"
+    
+    # Use trade.system if available, otherwise fallback to the signal's session, otherwise "Unknown"
+    sys_num = trade.system if trade.system else (sig.session if sig else "Unknown")
+    
     result = _compute_result(actual_profit)
     pnl_pips, pnl_dollars = _compute_pnl(trade, exit_price, actual_profit, symbol)
     r_achieved = _compute_r_achieved(trade, exit_price)

@@ -38,6 +38,11 @@ from engine import gi3_eurusd, gi3_gold, gi2_silver, eusdi1_core, xagi1_core, xa
 from engine import xagi3_tape_sweep
 from engine.xagi4_trend_scalper import Xagi4TrendScalper
 from engine.xagi5_volume_scalper import Xagi5VolumeScalper
+from engine.xagi6_crash_hunter import Xagi6CrashHunter
+from engine.xagi7_m5_trend_scalper import Xagi7M5TrendScalper
+from engine.xagi8_ifvg_reversal import Xagi8IFVGReversal
+from engine.xagi9_3_candle_momentum import Xagi9ThreeCandleMomentum
+from engine.news_engine_runner import run_news_engine_cycle
 # ─────────────────────────────────────────────────────────────────────────────
 from app.models.signals import Signal, MarketContext, PatternEvent
 from app.models.trades import Trade, TradeJournal, StraddlePair
@@ -633,13 +638,22 @@ def run_engine_cycle():
 
 # ─── Scalping Job ──────────────────────────────────────────────────────────────
 _scalping_integration = None
+_xagi4_integration = None
+_xagi5_integration = None
+_xagi6_integration = None
 
 def run_scalping_cycle():
     """Runs every minute to check for scalping signals on M5 data."""
-    global DRY_RUN, _scalping_integration
+    global _scalping_integration, _xagi4_integration, _xagi5_integration, _xagi6_integration
     
     if _scalping_integration is None:
         _scalping_integration = ScalpingIntegration()
+    if _xagi4_integration is None:
+        _xagi4_integration = Xagi4TrendScalper()
+    if _xagi5_integration is None:
+        _xagi5_integration = Xagi5VolumeScalper()
+    if _xagi6_integration is None:
+        _xagi6_integration = Xagi6CrashHunter()
         
     logger.info("Scalping cycle starting...")
         
@@ -668,6 +682,13 @@ def run_scalping_cycle():
 def run_m1_scalping_cycle():
     """Runs every minute to check for M1 hyper-scalping signals."""
     global DRY_RUN, _scalping_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
     
     if DRY_RUN:
         return
@@ -698,10 +719,19 @@ _xagi4_integration = None
 
 def run_xagi4_scalping_cycle():
     """Runs every minute to check for XAGI4 scalping signals on M5 data."""
-    global DRY_RUN, _xagi4_integration
+    global DRY_RUN, _xagi4_integration, _xagi6_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
     
     if _xagi4_integration is None:
         _xagi4_integration = Xagi4TrendScalper()
+    if _xagi6_integration is None:
+        _xagi6_integration = Xagi6CrashHunter()
         
     logger.info("[XAUUSD-i4] Scalping cycle starting...")
         
@@ -717,7 +747,7 @@ def run_xagi4_scalping_cycle():
             for sig in executed:
                 logger.info(f"[XAUUSD-i4-v2] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
                 telegram_notifier.notify_info("[XAUUSD-i4-v2] Gold Trend Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
-                
+
     except Exception as e:
         logger.exception(f"XAGI4 Scalping cycle error: {e}")
     finally:
@@ -725,13 +755,22 @@ def run_xagi4_scalping_cycle():
 
 def run_xagi4_m1_scalping_cycle():
     """Runs every minute to check for XAGI4 M1 hyper-scalping signals."""
-    global DRY_RUN, _xagi4_integration
+    global DRY_RUN, _xagi4_integration, _xagi6_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
     
     if DRY_RUN:
         return
         
     if _xagi4_integration is None:
         _xagi4_integration = Xagi4TrendScalper()
+    if _xagi6_integration is None:
+        _xagi6_integration = Xagi6CrashHunter()
         
     session = get_session()
     try:
@@ -757,6 +796,13 @@ _xagi5_integration = None
 def run_xagi5_scalping_cycle():
     """Runs every minute to check for XAGI5 scalping signals on M5 data."""
     global DRY_RUN, _xagi5_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
     
     if _xagi5_integration is None:
         _xagi5_integration = Xagi5VolumeScalper()
@@ -784,6 +830,13 @@ def run_xagi5_scalping_cycle():
 def run_xagi5_m1_scalping_cycle():
     """Runs every minute to check for XAGI5 M1 hyper-scalping signals."""
     global DRY_RUN, _xagi5_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
     
     if DRY_RUN:
         return
@@ -810,6 +863,198 @@ def run_xagi5_m1_scalping_cycle():
         session.close()
 
 
+# ── XAGI6 Crash Hunter Jobs ──
+_xagi6_integration = None
+
+def run_xagi6_scalping_cycle():
+    """Runs every minute to check for XAGI6 scalping signals on M5 data."""
+    global DRY_RUN, _xagi6_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
+    
+    if _xagi6_integration is None:
+        _xagi6_integration = Xagi6CrashHunter()
+        
+    logger.info("[XAUUSD-i6] Scalping cycle starting...")
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _xagi6_integration.check_and_execute(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAUUSD-i6] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i6] Gold Crash Hunter", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"XAGI6 Scalping cycle error: {e}")
+    finally:
+        session.close()
+
+def run_xagi6_m1_scalping_cycle():
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
+    # Placeholder for XAGI6 M1 logic if needed in future
+    pass
+
+# ── XAGI7 M5 Trend Scalper Jobs ──
+_xagi7_integration = None
+
+def run_xagi7_scalping_cycle():
+    """Runs every minute to check for XAGI7 M5 Trend signals."""
+    global DRY_RUN, _xagi7_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
+    
+    if _xagi7_integration is None:
+        _xagi7_integration = Xagi7M5TrendScalper()
+        
+    logger.info("[XAUUSD-i7] M5 Trend Scalper cycle starting...")
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _xagi7_integration.check_and_execute(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAUUSD-i7] M5 Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i7] Gold M5 Trend Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"XAGI7 M5 cycle error: {e}")
+    finally:
+        session.close()
+
+def run_xagi7_m1_scalping_cycle():
+    """Runs every minute to check for XAGI7 M1 signals aligned with M5 Trend."""
+    global DRY_RUN, _xagi7_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
+    
+    if _xagi7_integration is None:
+        _xagi7_integration = Xagi7M5TrendScalper()
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _xagi7_integration.check_and_execute_m1(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAUUSD-i7] M1 Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i7] Gold M5 Trend Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+                
+    except Exception as e:
+        logger.exception(f"XAGI7 M1 cycle error: {e}")
+    finally:
+        session.close()
+
+
+# ── XAGI8 IFVG Reversal Jobs ──
+_xagi8_integration = None
+
+def run_xagi8_scalping_cycle():
+    """Runs every 5 minutes to check for XAGI8 IFVG signals on M5 data."""
+    global DRY_RUN, _xagi8_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
+    
+    if _xagi8_integration is None:
+        _xagi8_integration = Xagi8IFVGReversal()
+        
+    logger.info("[XAUUSD-i8] IFVG cycle starting...")
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        if DRY_RUN:
+            return
+            
+        executed = _xagi8_integration.check_and_execute(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAUUSD-i8-v2] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i8-v2] Gold IFVG Scalper", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+
+    except Exception as e:
+        logger.exception(f"XAGI8 IFVG cycle error: {e}")
+    finally:
+        session.close()
+
+# ── XAGI9 3-Candle Momentum Jobs ──
+_xagi9_integration = None
+
+def run_xagi9_scalping_cycle():
+    """Runs every minute to catch M5 3-candle momentum shifts."""
+    global DRY_RUN, _xagi9_integration
+    
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        return
+        
+    if _xagi9_integration is None:
+        _xagi9_integration = Xagi9ThreeCandleMomentum()
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        if DRY_RUN:
+            return
+            
+        executed = _xagi9_integration.check_and_execute(config)
+        
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAUUSD-i9] Executed: {sig['direction']} {sig['type']} @ {sig['price']}")
+                telegram_notifier.notify_info("[XAUUSD-i9] 3-Candle Momentum", f"Executed {sig['direction']} {sig['type']} @ {sig['price']}")
+
+    except Exception as e:
+        logger.exception(f"XAGI9 cycle error: {e}")
+    finally:
+        session.close()
 
 
 # ── EUSDI6 Mean Reversion Scalping Jobs ──
@@ -818,6 +1063,13 @@ _eusdi6_integration = None
 def run_eusdi6_scalping_cycle():
     """Runs every minute to check for EUSDI6 MR scalping signals."""
     global DRY_RUN, _eusdi6_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
     
     if DRY_RUN:
         return
@@ -849,6 +1101,13 @@ _eusdi7_integration = None
 def run_eusdi7_scalping_cycle():
     """Runs every minute to check for EUSDI7 momentum scalping signals."""
     global DRY_RUN, _eusdi7_integration
+
+    # --- NEWS GUARD ---
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        logger.info(f"[NEWS GUARD] Scalping paused due to: {label}")
+        return
+    # ------------------
     
     if DRY_RUN:
         return
@@ -967,6 +1226,23 @@ def main():
     # XAGI5
     scheduler.add_job(run_xagi5_scalping_cycle, "cron", minute="*", id="xagi5_scalping_cycle")
     scheduler.add_job(run_xagi5_m1_scalping_cycle, "cron", minute="*", id="xagi5_m1_scalping_cycle")
+    
+    # XAGI6
+    scheduler.add_job(run_xagi6_scalping_cycle, "cron", minute="*", id="xagi6_scalping_cycle")
+    scheduler.add_job(run_xagi6_m1_scalping_cycle, "cron", minute="*", id="xagi6_m1_scalping_cycle")
+    
+    # XAGI7
+    scheduler.add_job(run_xagi7_scalping_cycle, "cron", minute="*", id="xagi7_scalping_cycle")
+    scheduler.add_job(run_xagi7_m1_scalping_cycle, "cron", minute="*", id="xagi7_m1_scalping_cycle")
+    
+    # XAGI8
+    scheduler.add_job(run_xagi8_scalping_cycle, "cron", minute="*", id="xagi8_scalping_cycle")
+    
+    # XAGI9 (3-Candle Momentum)
+    scheduler.add_job(run_xagi9_scalping_cycle, "cron", minute="*", id="xagi9_scalping_cycle")
+    
+    # Dedicated News Engine (Straddle & Fade)
+    scheduler.add_job(run_news_engine_cycle, "cron", minute="*", id="news_engine_cycle")
     
     scheduler.add_job(momentum_runner.run_momentum_cycle, "cron", minute="0,15,30,45", id="momentum_runner_cycle")
     scheduler.add_job(m5_momentum_runner.run_m5_momentum_cycle, "cron", minute="*/5", id="m5_momentum_runner_cycle")

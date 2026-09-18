@@ -54,6 +54,9 @@ class MT5Fetcher(BaseDataFetcher):
 
         count = self.bars_needed.get(timeframe, 200)
 
+        # Ensure symbol is in market watch before fetching
+        mt5.symbol_select(symbol, True)
+
         rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 0, count)
         if rates is None or len(rates) == 0:
             logger.error(f"MT5 returned no data for symbol={symbol} timeframe={timeframe}")

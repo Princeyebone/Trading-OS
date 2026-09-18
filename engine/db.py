@@ -48,6 +48,7 @@ def log_trade_to_db(
     from app.models.trades import Trade
 
     trade = Trade(
+        system=system,
         direction=direction.upper() if isinstance(direction, str) else direction,
         planned_entry=actual_entry,
         actual_entry=actual_entry,

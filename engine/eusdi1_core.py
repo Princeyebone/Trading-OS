@@ -129,14 +129,14 @@ def run_daily_breakout():
                     if res.get("success"):
                         log_trade_to_db(
                             system="EUSDI1",
-                            direction=direction,
+                            direction="LONG",
                             symbol="EURUSD",
-                            actual_entry=(res.get("actual_entry") or 0.0),
-                            stop_loss=sl_price if 'sl_price' in dir() else 0.0,
-                            take_profit=tp_price if 'tp_price' in dir() else 0.0,
-                            lot_size=0.10,
+                            actual_entry=(res.get("actual_entry") or current_ask),
+                            stop_loss=current_ask - (SL_PIPS * 0.0001),
+                            take_profit=current_ask + (TP_PIPS * 0.0001),
+                            lot_size=LOT_SIZE,
                             broker_order_id=str(res.get("order_id", "")),
-                            timeframe="M15",
+                            timeframe="D1",
                         )
                         telegram_notifier.notify_info(
                             "EUSDI1 Bullish Breakout Triggered",
@@ -165,14 +165,14 @@ def run_daily_breakout():
                     if res.get("success"):
                         log_trade_to_db(
                             system="EUSDI1",
-                            direction=direction,
+                            direction="SHORT",
                             symbol="EURUSD",
-                            actual_entry=(res.get("actual_entry") or 0.0),
-                            stop_loss=sl_price if 'sl_price' in dir() else 0.0,
-                            take_profit=tp_price if 'tp_price' in dir() else 0.0,
-                            lot_size=0.10,
+                            actual_entry=(res.get("actual_entry") or current_bid),
+                            stop_loss=current_bid + (SL_PIPS * 0.0001),
+                            take_profit=current_bid - (TP_PIPS * 0.0001),
+                            lot_size=LOT_SIZE,
                             broker_order_id=str(res.get("order_id", "")),
-                            timeframe="M15",
+                            timeframe="D1",
                         )
                         telegram_notifier.notify_info(
                             "EUSDI1 Bearish Breakout Triggered",

@@ -293,6 +293,69 @@ def detect_liquidity_levels(df: pd.DataFrame) -> List[Dict]:
     return levels
 
 
+def detect_inversion_fair_value_gaps(df: pd.DataFrame) -> List[Dict]:
+    """
+    Detect Inversion Fair Value Gaps (IFVGs).
+    An IFVG is a previously formed FVG that has been completely closed through.
+    Bullish IFVG: A Bearish FVG whose high was broken by a subsequent candle close.
+    Bearish IFVG: A Bullish FVG whose low was broken by a subsequent candle close.
+    """
+    ifvgs = []
+    highs = df["high"].values
+    lows  = df["low"].values
+    closes = df["close"].values
+    n = len(df)
+
+    # First, collect all historical FVGs in the lookback window
+    for i in range(1, n - 1):
+        # Bullish FVG (gap up)
+        gap_up = lows[i + 1] - highs[i - 1]
+        if gap_up > 0:
+            fvg_low = highs[i - 1]
+            # Check if this bullish FVG gets inverted later (price closes below fvg_low)
+            for j in range(i + 2, n):
+                if closes[j] < fvg_low:
+                    # Inverted! It becomes a BEARISH IFVG
+                    ifvgs.append({
+                        "type": "INVERSION_FVG",
+                        "direction": "BEARISH",
+                        "high": float(lows[i + 1]),
+                        "low": float(highs[i - 1]),
+                        "mid": float((lows[i + 1] + highs[i - 1]) / 2),
+                        "gap_size": round(float(gap_up), 2),
+                        "bar_index": int(j),
+                        "timestamp": str(df.index[j]),
+                        "confidence": 85,
+                        "original_fvg_index": int(i)
+                    })
+                    break # Stop tracking this FVG once it's inverted
+
+        # Bearish FVG (gap down)
+        gap_down = lows[i - 1] - highs[i + 1]
+        if gap_down > 0:
+            fvg_high = lows[i - 1]
+            # Check if this bearish FVG gets inverted later (price closes above fvg_high)
+            for j in range(i + 2, n):
+                if closes[j] > fvg_high:
+                    # Inverted! It becomes a BULLISH IFVG
+                    ifvgs.append({
+                        "type": "INVERSION_FVG",
+                        "direction": "BULLISH",
+                        "high": float(lows[i - 1]),
+                        "low": float(highs[i + 1]),
+                        "mid": float((lows[i - 1] + highs[i + 1]) / 2),
+                        "gap_size": round(float(gap_down), 2),
+                        "bar_index": int(j),
+                        "timestamp": str(df.index[j]),
+                        "confidence": 85,
+                        "original_fvg_index": int(i)
+                    })
+                    break
+
+    # Return top 5 most recent IFVGs based on the bar they were inverted
+    return sorted(ifvgs, key=lambda x: x["bar_index"], reverse=True)[:5]
+
+
 def detect_all_patterns(timeframes: dict) -> dict:
     """
     Run all pattern detectors on H4, H1 and M15.
@@ -310,6 +373,7 @@ def detect_all_patterns(timeframes: dict) -> dict:
 
         obs = detect_order_blocks(df)
         fvgs = detect_fair_value_gaps(df)
+        ifvgs = detect_inversion_fair_value_gaps(df)
         bos = detect_break_of_structure(df)
         liq = detect_liquidity_levels(df)
 
@@ -320,6 +384,9 @@ def detect_all_patterns(timeframes: dict) -> dict:
         for fvg in fvgs:
             fvg["timeframe"] = tf
             tf_patterns.append(fvg)
+        for ifvg in ifvgs:
+            ifvg["timeframe"] = tf
+            tf_patterns.append(ifvg)
         for b in bos:
             b["timeframe"] = tf
             tf_patterns.append(b)
@@ -330,10 +397,10 @@ def detect_all_patterns(timeframes: dict) -> dict:
         liquidity_by_tf[tf] = liq
 
     # Build balanced output: up to 4 patterns per timeframe (H4, H1, M15) = max 12
-    # Priority order within each TF: BOS first (highest signal), then OB, then FVG
+    # Priority order within each TF: BOS first (highest signal), then OB, then IFVG, then FVG
     def sort_key(p):
-        order = {"BREAK_OF_STRUCTURE": 0, "ORDER_BLOCK": 1, "FAIR_VALUE_GAP": 2}
-        return order.get(p["type"], 3)
+        order = {"BREAK_OF_STRUCTURE": 0, "ORDER_BLOCK": 1, "INVERSION_FVG": 2, "FAIR_VALUE_GAP": 3}
+        return order.get(p["type"], 4)
 
     final_patterns = []
     per_tf_limit = 4

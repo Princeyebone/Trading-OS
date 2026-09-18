@@ -14,6 +14,7 @@ class Trade(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     signal_id: Optional[int] = Field(default=None, foreign_key="signals.id")
+    system: Optional[str] = Field(default=None, max_length=50)
     opened_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     closed_at: Optional[datetime] = None
     direction: str = Field(max_length=5)           # "LONG" or "SHORT"

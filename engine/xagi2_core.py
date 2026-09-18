@@ -2,8 +2,8 @@ import logging
 import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
-
 from engine import broker_executor, telegram_notifier
+from engine.db import log_trade_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def _get_current_position_direction() -> str | None:
         return None
         
     for p in positions:
-        if hasattr(p, "comment") and p.comment and "XAGI2" in p.comment:
+        if hasattr(p, "comment") and p.comment and "-i2-" in p.comment:
             if p.type == mt5.POSITION_TYPE_BUY:
                 return "LONG"
             elif p.type == mt5.POSITION_TYPE_SELL:
@@ -65,12 +65,10 @@ def _close_xagi2_positions():
         return
         
     for p in positions:
-        if hasattr(p, "comment") and p.comment and "XAGI2" in p.comment:
+        if hasattr(p, "comment") and p.comment and "-i2-" in p.comment:
             broker_executor.close_position(
                 ticket=p.ticket,
-                symbol=SYMBOL,
-                position_type=p.type,
-                volume=p.volume
+                symbol=SYMBOL
             )
             logger.info(f"[{SYMBOL}] Closed XAGI2 position {p.ticket} for reversal.")
 
@@ -106,9 +104,22 @@ def run_ema_trend():
                     entry_price=current_price,
                     stop_loss=0.0,  # Pure SAR system
                     take_profit=0.0,
-                    comment="XAUUSD-i2-L-v2"
+                    comment=f"{SYMBOL}-i2-L-v2",
+                    symbol=SYMBOL,
+                    magic=202602
                 )
                 if res.get("success"):
+                    log_trade_to_db(
+                        system="XAGI2",
+                        direction="LONG",
+                        symbol=SYMBOL,
+                        actual_entry=(res.get("actual_entry") or current_price),
+                        stop_loss=0.0,
+                        take_profit=0.0,
+                        lot_size=LOT_SIZE,
+                        broker_order_id=str(res.get("order_id", "")),
+                        timeframe="H1",
+                    )
                     telegram_notifier.notify_info(
                         "XAGI2 Bullish Trend Triggered",
                         f"LONG {SYMBOL} @ {res.get('actual_entry', current_price):.3f}\n"
@@ -132,9 +143,22 @@ def run_ema_trend():
                     entry_price=current_price,
                     stop_loss=0.0,  # Pure SAR system
                     take_profit=0.0,
-                    comment="XAUUSD-i2-S-v2"
+                    comment=f"{SYMBOL}-i2-S-v2",
+                    symbol=SYMBOL,
+                    magic=202602
                 )
                 if res.get("success"):
+                    log_trade_to_db(
+                        system="XAGI2",
+                        direction="SHORT",
+                        symbol=SYMBOL,
+                        actual_entry=(res.get("actual_entry") or current_price),
+                        stop_loss=0.0,
+                        take_profit=0.0,
+                        lot_size=LOT_SIZE,
+                        broker_order_id=str(res.get("order_id", "")),
+                        timeframe="H1",
+                    )
                     telegram_notifier.notify_info(
                         "XAGI2 Bearish Trend Triggered",
                         f"SHORT {SYMBOL} @ {res.get('actual_entry', current_price):.3f}\n"

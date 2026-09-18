@@ -68,7 +68,6 @@ class AdaptiveParameters:
             tp_pips = sl_pips * 1.0
             rr = 1.0
         
-        # 5. Strategy-specific adjustments
         if self.strategy_type == 'SCALP':
             # Scalping: tighter parameters
             sl_pips = min(sl_pips, 120.0)
@@ -76,6 +75,12 @@ class AdaptiveParameters:
             # Ensure minimum TP for scalping
             tp_pips = max(tp_pips, 60.0)
             sl_pips = max(sl_pips, 40.0)
+        elif self.strategy_type == 'CRASH_HUNTER':
+            # Crash Hunter requires very tight SL so it doesn't bleed out if wrong
+            sl_pips = min(sl_pips, 50.0)
+            sl_pips = max(sl_pips, 30.0) # Absolute minimum 30 pips
+            tp_pips = min(tp_pips, 100.0)
+            tp_pips = max(tp_pips, 60.0)
         else:  # TCP
             # TCP: wider parameters
             sl_pips = min(sl_pips, 300.0)
