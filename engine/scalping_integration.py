@@ -259,6 +259,7 @@ class ScalpingIntegration:
             stop_loss=sl,
             take_profit=0.0, # TP is managed by Step-Trailing system
             comment="XAUUSD-i1-Core",
+            magic=202611,
         )
         
         if not order_result["success"]:

@@ -150,6 +150,7 @@ def run_gi2_candle_pullback_cycle():
             stop_loss=sl,
             take_profit=tp,
             comment="GI2-PULLBACK",
+            magic=202621,
         )
 
         if result["success"]:

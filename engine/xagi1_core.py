@@ -106,7 +106,7 @@ def run_macd_trend():
                     take_profit=0.0,
                     comment="XAGUSD-i1-L-v2",
                     symbol=SYMBOL,
-                    magic=202600
+                    magic=202701
                 )
                 if res.get("success"):
                     log_trade_to_db(
@@ -145,7 +145,7 @@ def run_macd_trend():
                     take_profit=0.0,
                     comment="XAGUSD-i1-S-v2",
                     symbol=SYMBOL,
-                    magic=202600
+                    magic=202701
                 )
                 if res.get("success"):
                     log_trade_to_db(

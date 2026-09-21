@@ -106,10 +106,10 @@ def manage_open_trades():
             _MAGIC_MAP = {
                 202600: "XAGI1",  202601: "XAGI1-Swing",
                 202602: "XAGI2",  202603: "XAGI3",
-                202604: "XAGI4",  202700: "XAGI3",
-                202800: "XAGI5",  202900: "XAGI6",
-                203000: "EUSDI6", 203100: "EUSDI7",
-                203200: "GI2",    203300: "GI3",
+                202604: "XAGI4",  202700: "XAGI3",  202702: "XAGI2",
+                202800: "XAGI5",  202804: "XAU-i4", 202900: "XAGI6",
+                203000: "EURUSD-i6", 203100: "EURUSD-i7",
+                203200: "XAU-i6",    203300: "GI3",
             }
             sig = session.get(Signal, trade.signal_id) if trade.signal_id else None
             sys_num = sig.session if (sig and sig.session) else None
@@ -117,13 +117,13 @@ def manage_open_trades():
                 # Try to derive from MT5 position comment or magic
                 _mt5_pos_temp = mt5.positions_get(ticket=ticket)
                 if _mt5_pos_temp:
-                    pos_comment = _mt5_pos_temp[0].comment or ""
                     magic = _mt5_pos_temp[0].magic
-                    # Comment format is e.g. "EURUSD-i7" or "XAUUSD-i1-Core"
-                    if pos_comment:
-                        sys_num = pos_comment.replace("XAUUSD-", "XAGI").replace("EURUSD-", "EUSDI").replace("XAGUSD-", "XAGI").split("-")[0]
-                    if not sys_num or sys_num == pos_comment:
-                        sys_num = _MAGIC_MAP.get(magic, f"Magic#{magic}")
+                    pos_comment = _mt5_pos_temp[0].comment or ""
+                    sys_num = _MAGIC_MAP.get(magic)
+                    if not sys_num and pos_comment:
+                        sys_num = pos_comment.split("-v")[0].split("-zero")[0]
+                    if not sys_num:
+                        sys_num = f"Magic#{magic}"
             
             # Fetch MT5 position to ensure it's still open
             mt5_pos = mt5.positions_get(ticket=ticket)
@@ -190,8 +190,29 @@ def manage_open_trades():
             point = mt5.symbol_info(trade_symbol).point
             pip_multiplier = 1.0 / (point * 10.0) if point else 10.0
             
-            # Skip tight ratcheting TP for Macro Swing trades
-            if mt5_pos[0].magic == 202601:
+            # Skip dynamic ratcheting/trailing TP for Macro Swing & Pure TP/SL Scalpers (EUSDI6, XAUI6, and XAGI2)
+            # These systems rely strictly on their native broker Take-Profit orders at the mean
+            if mt5_pos[0].magic in [202601, 203000, 203200, 202702]:
+                strat_label = {203000: "EURUSD-i6 (Mean Reversion)", 203200: "XAUUSD-i6 (Zero-Loss Scalper)", 202702: "XAGUSD-i2 (Zero-Loss Scalper)", 202601: "Macro Swing"}.get(mt5_pos[0].magic, f"Magic#{mt5_pos[0].magic}")
+                profit_val = mt5_pos[0].profit
+                
+                # Zero-Loss Protection: If profit surpasses +$15.00, automatically lock SL to Entry + buffer to guarantee a green outcome
+                if mt5_pos[0].magic in [203200, 202702] and profit_val >= 15.0:
+                    entry_p = mt5_pos[0].price_open
+                    cur_sl = mt5_pos[0].sl
+                    is_buy = (mt5_pos[0].type == mt5.POSITION_TYPE_BUY)
+                    # Symbol-aware buffer (0.15 for Gold, 0.02 for Silver)
+                    buffer = 0.15 if "XAU" in trade_symbol else 0.02
+                    decimals = 2 if "XAU" in trade_symbol else 3
+                    be_level = (entry_p + buffer) if is_buy else (entry_p - buffer)
+                    need_be_move = (cur_sl < be_level) if is_buy else (cur_sl > be_level or cur_sl == 0.0)
+                    if need_be_move:
+                        req = {"action": mt5.TRADE_ACTION_SLTP, "position": ticket, "sl": round(be_level, decimals), "tp": mt5_pos[0].tp}
+                        res = mt5.order_send(req)
+                        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                            logger.info(f"🔒 [ZERO-LOSS AUTO-GUARD] Moved {trade_symbol} SL to Break-Even ({round(be_level, decimals)}) after profit exceeded +${profit_val:.2f}!")
+                
+                logger.info(f"🛡️ [{trade_symbol} | {strat_label} | Ticket #{ticket}] ACTIVE (Broker TP/SL): PnL ${profit_val:+.2f} | TP: {mt5_pos[0].tp} | SL: {mt5_pos[0].sl}")
                 continue
                 
             # M15 FVG Sniper Trailing Logic (Magic 202602)
@@ -302,12 +323,12 @@ def manage_open_trades():
                     else:
                         profit_pips = (entry - live_ask) * pip_multiplier
                     
-                    # 20-Minute Forced Close Rule
-                    if trade_age_mins > 20 and profit_pips < 0:
-                        logger.info(f"⏰ [XAUUSD-i4] Trade #{trade.id} aged {trade_age_mins:.1f} mins and is negative ({profit_pips:.1f} pips). Force Closing!")
+                    # 45-Minute Stagnant Trade Rule (avoid choking normal M15 candle developments)
+                    if trade_age_mins > 45 and profit_pips < -20.0:
+                        logger.info(f"⏰ [XAUUSD-i4] Trade #{trade.id} aged {trade_age_mins:.1f} mins with persistent adverse excursion ({profit_pips:.1f} pips). Force Closing!")
                         success = broker_executor.close_position(ticket)
                         if success:
-                            telegram_notifier.notify_success(f"[{trade_symbol} | Sys #{sys_num}] Force Close", f"⏰ Trade #{trade.id} (Ticket #{ticket}) Force Closed after 20 mins to prevent trend drag. Loss: {profit_pips:.1f} pips.")
+                            telegram_notifier.notify_success(f"[{trade_symbol} | Sys #{sys_num}] Force Close", f"⏰ Trade #{trade.id} (Ticket #{ticket}) Force Closed after 45 mins of adverse excursion. Loss: {profit_pips:.1f} pips.")
                         continue
                 # If not forced closed, let it fall through to the generic Step TP logic
 
@@ -529,6 +550,56 @@ def monitor_straddles():
                 
     except Exception as e:
         logger.exception(f"Straddle Monitor loop error: {e}")
+    finally:
+        session.close()
+
+def execute_friday_killswitch():
+    """
+    Closes all active open positions before the weekend gap.
+    Triggered by a cron job on Friday evenings.
+    """
+    logger.warning("🚨 INITIATING FRIDAY KILLSWITCH! CLOSING ALL OPEN POSITIONS 🚨")
+    session = get_session()
+    try:
+        open_positions = broker_executor.get_open_positions()
+        if not open_positions:
+            logger.info("No open positions found. Friday Killswitch complete.")
+            return
+
+        for pos in open_positions:
+            ticket = pos["ticket"]
+            logger.info(f"Killswitch closing ticket #{ticket}")
+            success = broker_executor.close_position(ticket)
+            
+            if success:
+                telegram_notifier.notify_success(
+                    "Friday Killswitch", 
+                    f"🚨 Closed ticket #{ticket} successfully to prevent weekend gap exposure."
+                )
+                # Find matching DB trade and mark closed
+                db_trade = session.exec(select(Trade).where((Trade.broker_order_id == str(ticket)) & (Trade.status == "OPEN"))).first()
+                if db_trade:
+                    db_trade.status = "CLOSED"
+                    db_trade.closed_at = datetime.now(timezone.utc)
+                    session.add(db_trade)
+                    
+                    # Update TradeOutcome
+                    outcome = session.exec(select(TradeOutcome).where(TradeOutcome.trade_id == db_trade.id)).first()
+                    if not outcome:
+                        outcome = TradeOutcome(trade_id=db_trade.id, exit_price=0.0)
+                    outcome.exit_reason = "WEEKEND_KILLSWITCH"
+                    outcome.closed_at = datetime.now(timezone.utc)
+                    session.add(outcome)
+                    session.commit()
+            else:
+                logger.error(f"Killswitch failed to close ticket #{ticket}")
+                telegram_notifier.notify_error(
+                    "Friday Killswitch", 
+                    f"CRITICAL: Failed to close ticket #{ticket} before weekend!"
+                )
+    except Exception as e:
+        logger.exception(f"Friday Killswitch error: {e}")
+        telegram_notifier.notify_error("Friday Killswitch", f"Killswitch exception: {e}")
     finally:
         session.close()
 

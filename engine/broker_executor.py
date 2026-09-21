@@ -266,8 +266,8 @@ def close_position(ticket: int, symbol: str = 'XAUUSD') -> bool:
             "position": ticket,
             "price": price,
             "deviation": 20,
-            "magic": 202600,
-            "comment": "TradingOS-close",
+            "magic": pos.magic if pos and pos.magic else 202600,
+            "comment": f"{pos.comment[:22]}-close" if pos and pos.comment else "TradingOS-close",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_mode,
         }
@@ -399,6 +399,7 @@ def place_straddle_orders(
     tp1_dist: float,
     expiration_hours: int = 4,
     symbol: str = 'XAUUSD',
+    magic: int = 202600,
 ) -> dict:
     """
     Place a Buy Stop and Sell Stop order simultaneously.
@@ -436,7 +437,7 @@ def place_straddle_orders(
             "sl": round(buy_stop_price - sl_dist, 2),
             "tp": round(buy_stop_price + tp1_dist, 2),
             "deviation": 20,
-            "magic": 202600,
+            "magic": magic,
             "comment": "ABE-BuyStop",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
@@ -452,7 +453,7 @@ def place_straddle_orders(
             "sl": round(sell_stop_price + sl_dist, 2),
             "tp": round(sell_stop_price - tp1_dist, 2),
             "deviation": 20,
-            "magic": 202600,
+            "magic": magic,
             "comment": "ABE-SellStop",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,

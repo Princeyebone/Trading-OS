@@ -113,7 +113,8 @@ def run_vwap_reversion_cycle():
                 entry_price=c,
                 stop_loss=sl,
                 take_profit=tp,
-                comment="GI3_VWAP"
+                comment="GI3_VWAP",
+                magic=202631
             )
             if res.get("success"):
                 log_trade_to_db(
@@ -205,7 +206,8 @@ def run_rsi_divergence_cycle():
                 entry_price=curr_c,
                 stop_loss=sl,
                 take_profit=tp,
-                comment="GI3_RSI_DIV"
+                comment="GI3_RSI_DIV",
+                magic=202631
             )
             if res.get("success"):
                 log_trade_to_db(

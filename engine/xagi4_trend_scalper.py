@@ -17,7 +17,7 @@ from app.models.signals import Signal
 from engine.db import get_session
 
 logger = logging.getLogger("engine.xagi4_trend_scalper")
-MAGIC_NUMBER = 202800
+MAGIC_NUMBER = 202804
 
 class Xagi4TrendScalper:
     def __init__(self):

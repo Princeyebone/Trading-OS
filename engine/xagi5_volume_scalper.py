@@ -16,7 +16,7 @@ from app.models.signals import Signal
 from engine.db import get_session
 
 logger = logging.getLogger("engine.xagi5_volume_scalper")
-MAGIC_NUMBER = 202900
+MAGIC_NUMBER = 202800
 
 class Xagi5VolumeScalper:
     def __init__(self):

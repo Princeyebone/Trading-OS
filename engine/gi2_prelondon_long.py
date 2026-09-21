@@ -68,6 +68,7 @@ def run_gi2_prelondon_long_entry():
             stop_loss=live_price - 10.0,  # 100 pip emergency SL
             take_profit=0.0,              # Time-based exit, no fixed TP
             comment="GI2-PRELON-LONG",
+            magic=202623,
         )
 
         if result["success"]:
@@ -120,7 +121,7 @@ def run_gi2_prelondon_long_exit():
                 "position": pos.ticket,
                 "price": close_price,
                 "deviation": 20,
-                "magic": 20003,
+                "magic": 202623,
                 "comment": "GI2-PRELON-LONG-EXIT",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": mt5.ORDER_FILLING_IOC,

@@ -7,6 +7,7 @@ from engine import broker_executor, telegram_notifier
 
 logger = logging.getLogger(__name__)
 
+MAGIC_NUMBER = 202200
 SYMBOL = "EURUSD"
 LOT_SIZE = 0.10
 SL_PIPS = 15.0
@@ -128,7 +129,8 @@ def run_asian_breakout():
                     lot_size=LOT_SIZE,
                     sl_dist=SL_PIPS * 0.0001,
                     tp1_dist=TP_PIPS * 0.0001,
-                    expiration_hours=9 # Valid until 16:00
+                    expiration_hours=9, # Valid until 16:00
+                    magic=MAGIC_NUMBER
                 )
                 
                 if res.get("success"):

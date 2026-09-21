@@ -7,6 +7,7 @@ from engine import broker_executor, telegram_notifier
 
 logger = logging.getLogger(__name__)
 
+MAGIC_NUMBER = 202400
 SYMBOL = "EURUSD"
 LOT_SIZE = 0.10
 
@@ -67,7 +68,8 @@ def run_weekly_gap_close():
             logger.info(f"[{SYMBOL}] EUSDI4 Detected massive GAP UP. Placing SHORT to fill gap.")
             res = broker_executor.place_order(
                 symbol=SYMBOL, direction="SHORT", lot_size=LOT_SIZE,
-                entry_price=bid, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i4-GS-v2"
+                entry_price=bid, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i4-GS-v2",
+                magic=MAGIC_NUMBER
             )
             if res.get("success"):
                 telegram_notifier.notify_trade("EUSDI4 Weekly Gap Close", "SHORT", SYMBOL, bid, sl_price, tp_price, reason="Fading massive Monday Gap UP")
@@ -80,7 +82,8 @@ def run_weekly_gap_close():
             logger.info(f"[{SYMBOL}] EUSDI4 Detected massive GAP DOWN. Placing LONG to fill gap.")
             res = broker_executor.place_order(
                 symbol=SYMBOL, direction="LONG", lot_size=LOT_SIZE,
-                entry_price=ask, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i4-GL-v2"
+                entry_price=ask, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i4-GL-v2",
+                magic=MAGIC_NUMBER
             )
             if res.get("success"):
                 telegram_notifier.notify_trade("EUSDI4 Weekly Gap Close", "LONG", SYMBOL, ask, sl_price, tp_price, reason="Fading massive Monday Gap DOWN")
@@ -127,7 +130,8 @@ def run_london_fix_fade():
             logger.info(f"[{SYMBOL}] EUSDI4 Detected Bullish Fix Spike. Fading SHORT.")
             res = broker_executor.place_order(
                 symbol=SYMBOL, direction="SHORT", lot_size=LOT_SIZE,
-                entry_price=bid, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i4-FS-v2"
+                entry_price=bid, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i4-FS-v2",
+                magic=MAGIC_NUMBER
             )
             if res.get("success"):
                 telegram_notifier.notify_trade("EUSDI4 London Fix Reversal", "SHORT", SYMBOL, bid, sl_price, tp_price, reason="Fading 16:00 UTC Bullish Momentum Spike")
@@ -140,7 +144,8 @@ def run_london_fix_fade():
             logger.info(f"[{SYMBOL}] EUSDI4 Detected Bearish Fix Spike. Fading LONG.")
             res = broker_executor.place_order(
                 symbol=SYMBOL, direction="LONG", lot_size=LOT_SIZE,
-                entry_price=ask, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i4-FL-v2"
+                entry_price=ask, stop_loss=sl_price, take_profit=tp_price, comment="EURUSD-i4-FL-v2",
+                magic=MAGIC_NUMBER
             )
             if res.get("success"):
                 telegram_notifier.notify_trade("EUSDI4 London Fix Reversal", "LONG", SYMBOL, ask, sl_price, tp_price, reason="Fading 16:00 UTC Bearish Momentum Spike")

@@ -29,7 +29,7 @@ from engine.eusdi7_momentum_scalper import Eusdi7MomentumScalper
 from engine.rule_engine import evaluate_all as rule_engine_evaluate
 from engine.news_guard import is_news_blackout
 from engine.outcome_monitor import check_and_close_trades
-from engine.trade_manager import manage_open_trades
+from engine.trade_manager import manage_open_trades, execute_friday_killswitch
 from engine.market_tape_monitor import detect_tape_events
 from engine.scalping_integration import ScalpingIntegration
 # ── Gold Implementation 2 (Parallel Research Portfolio) ──────────────────────
@@ -40,8 +40,7 @@ from engine.xagi4_trend_scalper import Xagi4TrendScalper
 from engine.xagi5_volume_scalper import Xagi5VolumeScalper
 from engine.xagi6_crash_hunter import Xagi6CrashHunter
 from engine.xagi7_m5_trend_scalper import Xagi7M5TrendScalper
-from engine.xagi8_ifvg_reversal import Xagi8IFVGReversal
-from engine.xagi9_3_candle_momentum import Xagi9ThreeCandleMomentum
+from engine.xau_hyper_scalper import XauHyperScalper
 from engine.news_engine_runner import run_news_engine_cycle
 # ─────────────────────────────────────────────────────────────────────────────
 from app.models.signals import Signal, MarketContext, PatternEvent
@@ -54,8 +53,12 @@ engine_logger = logging.getLogger("engine")
 engine_logger.setLevel(logging.INFO)
 if not engine_logger.handlers:
     sh = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s"))
+    fh = logging.FileHandler(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine.log"), encoding="utf-8")
+    formatter = logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s")
+    sh.setFormatter(formatter)
+    fh.setFormatter(formatter)
     engine_logger.addHandler(sh)
+    engine_logger.addHandler(fh)
     engine_logger.propagate = False
 
 logger = logging.getLogger("engine.scheduler")
@@ -581,7 +584,9 @@ def run_engine_cycle():
             entry_price=entry,
             stop_loss=sl,
             take_profit=0.0,  # CRITICAL: TP is 0.0 for Ratcheting TP system
+            comment=f"{signal.session[:15]}-Runner" if signal.session else "Core-M15-Runner",
             symbol=trade_symbol,
+            magic=202600,
         )
 
         if not order_result["success"]:
@@ -1095,6 +1100,39 @@ def run_eusdi6_scalping_cycle():
     finally:
         session.close()
 
+# ── XAU-i6 (Gold Hyper Scalper — adapted from EUSDI6) ──
+_xau_hyper_integration = None
+
+def run_xau_hyper_scalping_cycle():
+    """Runs every minute to check for XAUUSD M1 Mean Reversion (Bollinger + RSI snap-back)."""
+    global DRY_RUN, _xau_hyper_integration
+
+    is_blackout, label = is_news_blackout(15)
+    if is_blackout:
+        return
+        
+    if DRY_RUN:
+        return
+        
+    if _xau_hyper_integration is None:
+        _xau_hyper_integration = XauHyperScalper()
+        
+    session = get_session()
+    try:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active:
+            return
+            
+        executed = _xau_hyper_integration.check_and_execute(config)
+        if executed:
+            for sig in executed:
+                logger.info(f"[XAU-i6] Gold MR Scalp Executed: {sig['direction']} @ {sig['price']} | TP: {sig['tp']} | SL: {sig['sl']}")
+                telegram_notifier.notify_info("[XAU-i6] Gold Mean Reversion", f"Executed {sig['direction']} @ {sig['price']}\nTP: {sig['tp']}\nSL: {sig['sl']}")
+    except Exception as e:
+        logger.exception(f"XAU-i6 Scalping cycle error: {e}")
+    finally:
+        session.close()
+
 # ── EUSDI7 Momentum Scalping Jobs ──
 _eusdi7_integration = None
 
@@ -1176,11 +1214,15 @@ def start_background_scheduler():
     scheduler.add_job(run_eusdi6_scalping_cycle, "cron", minute="*", id="eusdi6_scalping_cycle")
     # Strategy: EURUSD High-Frequency Momentum Scalper (EUSDI7)
     scheduler.add_job(run_eusdi7_scalping_cycle, "cron", minute="*", id="eusdi7_scalping_cycle")
+    # Strategy: Gold Mean Reversion Hyper Scalper (XAU-i6 adapted from EUSDI6)
+    scheduler.add_job(run_xau_hyper_scalping_cycle, "cron", minute="*", id="xau_hyper_scalping_cycle")
     # ── XAGI1: XAGUSD (Silver) Strategies ───────────────────────────────────────
-    # Strategy: MACD Zero Cross Stop & Reverse Runner (Hourly)
-    scheduler.add_job(xagi1_core.run_macd_trend, "cron", minute="0", id="xagi1_macd_trend")
+    # [DISABLED] Legacy MACD runner disabled in favor of XAGI2 Zero-Loss Scalper
+    # scheduler.add_job(xagi1_core.run_macd_trend, "cron", minute="0", id="xagi1_macd_trend")
     # Strategy: EMA 9/21 Stop & Reverse Runner (Hourly)
-    scheduler.add_job(xagi2_core.run_ema_trend, "cron", minute="0", id="xagi2_ema_trend")
+    # scheduler.add_job(xagi2_core.run_ema_trend, "cron", minute="0", id="xagi2_ema_trend")
+    # Strategy: Silver Loss-Eater Hyper Scalper (XAGI2, M5 Rejection Reversion with BE Lock)
+    scheduler.add_job(xagi2_core.run_silver_scalper_cycle, "cron", minute="*", id="xagi2_silver_scalper")
     # ── GI2: XAGUSD (Silver) Strategies ───────────────────────────────────────
     # [DISABLED] Silver is too highly trending for mean-reversion; removing to protect account
     # scheduler.add_job(gi2_silver.run_silver_a_entry, "cron", hour="4",  minute="0", timezone="UTC", id="gi2_xag_a_entry")
@@ -1279,10 +1321,14 @@ def main():
     # Strategy: Asian Squeeze Breakout (EUSDI5) - Mon-Fri 07:05 UTC
     scheduler.add_job(eusdi5_profiling.run_asian_volatility_squeeze, "cron", day_of_week="mon-fri", hour="7", minute="5", timezone="UTC", id="eusdi5_asian_squeeze")
     # ── XAGI1: XAGUSD (Silver) Strategies ───────────────────────────────────────
-    # Strategy: MACD Zero Cross Stop & Reverse Runner (Hourly)
-    scheduler.add_job(xagi1_core.run_macd_trend, "cron", minute="0", id="xagi1_macd_trend")
+    # [DISABLED] Legacy MACD runner disabled in favor of XAGI2 Zero-Loss Scalper
+    # scheduler.add_job(xagi1_core.run_macd_trend, "cron", minute="0", id="xagi1_macd_trend")
     # Strategy: EMA 9/21 Stop & Reverse Runner (Hourly)
-    scheduler.add_job(xagi2_core.run_ema_trend, "cron", minute="0", id="xagi2_ema_trend")
+    # scheduler.add_job(xagi2_core.run_ema_trend, "cron", minute="0", id="xagi2_ema_trend")
+    # Strategy: Silver Loss-Eater Hyper Scalper (XAGI2, M5 Rejection Reversion with BE Lock)
+    scheduler.add_job(xagi2_core.run_silver_scalper_cycle, "cron", minute="*", id="xagi2_silver_scalper_cli")
+    # Strategy: Gold Zero-Loss Adaptive Hyper Scalper (XAU-i6)
+    scheduler.add_job(run_xau_hyper_scalping_cycle, "cron", minute="*", id="xau_hyper_scalping_cycle_cli")
     # ── GI2: XAGUSD (Silver) Strategies ───────────────────────────────────────
     # [DISABLED] Silver is too highly trending for mean-reversion; removing to protect account
     # scheduler.add_job(gi2_silver.run_silver_a_entry, "cron", hour="4",  minute="0", timezone="UTC", id="gi2_xag_a_entry")
@@ -1291,7 +1337,9 @@ def main():
     # scheduler.add_job(gi2_silver.run_silver_b_exit,  "cron", hour="17", minute="0", timezone="UTC", id="gi2_xag_b_exit")
     # scheduler.add_job(gi2_silver.run_silver_bb_cycle, "cron", minute="*/5", id="gi2_xag_bb")
     # ─────────────────────────────────────────────────────────
-    # ─────────────────────────────────────────────────────────
+    # ── FRIDAY KILLSWITCH ──
+    # Closes all open positions before weekend gap at 20:50 UTC (10 mins before Gold close)
+    scheduler.add_job(execute_friday_killswitch, "cron", day_of_week="fri", hour="20", minute="50", timezone="UTC", id="friday_killswitch")
 
     logger.info("🚀 Engine scheduler started — running every 15 minutes")
     logger.info("   Press Ctrl+C to stop")

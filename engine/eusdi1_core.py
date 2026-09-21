@@ -9,6 +9,7 @@ from engine.db import log_trade_to_db
 
 logger = logging.getLogger(__name__)
 
+MAGIC_NUMBER = 202710
 SYMBOL = "EURUSD"
 LOT_SIZE = 0.10  # Standard risk
 SL_PIPS = 20.0
@@ -124,7 +125,8 @@ def run_daily_breakout():
                         entry_price=current_ask,
                         stop_loss=current_ask - (SL_PIPS * 0.0001),
                         take_profit=current_ask + (TP_PIPS * 0.0001),
-                        comment="EURUSD-i1-L-v2"
+                        comment="EURUSD-i1-L-v2",
+                        magic=MAGIC_NUMBER
                     )
                     if res.get("success"):
                         log_trade_to_db(
@@ -160,7 +162,8 @@ def run_daily_breakout():
                         entry_price=current_bid,
                         stop_loss=current_bid + (SL_PIPS * 0.0001),
                         take_profit=current_bid - (TP_PIPS * 0.0001),
-                        comment="EURUSD-i1-S-v2"
+                        comment="EURUSD-i1-S-v2",
+                        magic=MAGIC_NUMBER
                     )
                     if res.get("success"):
                         log_trade_to_db(

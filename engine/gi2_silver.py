@@ -67,6 +67,7 @@ def _open_trade(sid: str, direction: str, sl_pips: float, comment: str):
             stop_loss=sl,
             take_profit=0.0,
             comment=comment,
+            magic=202624,
         )
         if result["success"]:
             _mark_traded(sid)
@@ -107,7 +108,7 @@ def _close_trades(comment: str, label: str):
                 "position": pos.ticket,
                 "price": close_price,
                 "deviation": 20,
-                "magic": 30002,
+                "magic": 202624,
                 "comment": f"{comment}-EXIT",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": mt5.ORDER_FILLING_IOC,
@@ -232,6 +233,7 @@ def run_silver_bb_cycle():
             stop_loss=sl,
             take_profit=tp,
             comment="GI2-XAG-BB",
+            magic=202624,
         )
 
         if result["success"]:

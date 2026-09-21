@@ -7,6 +7,7 @@ from engine import broker_executor, telegram_notifier
 
 logger = logging.getLogger(__name__)
 
+MAGIC_NUMBER = 202300
 SYMBOL = "EURUSD"
 LOT_SIZE = 0.10
 ATR_SL_MULT = 1.0
@@ -112,7 +113,8 @@ def run_camarilla_reversal():
                     entry_price=bid,
                     stop_loss=sl_price,
                     take_profit=tp_price,
-                    comment="EURUSD-i3-S-v2"
+                    comment="EURUSD-i3-S-v2",
+                    magic=MAGIC_NUMBER
                 )
                 if res.get("success"):
                     telegram_notifier.notify_trade(
@@ -136,7 +138,8 @@ def run_camarilla_reversal():
                     entry_price=ask,
                     stop_loss=sl_price,
                     take_profit=tp_price,
-                    comment="EURUSD-i3-L-v2"
+                    comment="EURUSD-i3-L-v2",
+                    magic=MAGIC_NUMBER
                 )
                 if res.get("success"):
                     telegram_notifier.notify_trade(

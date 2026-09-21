@@ -81,6 +81,7 @@ def _open_trade(strategy_id: str, direction: str, sl_pips: float, tp_pips: float
             stop_loss=sl,
             take_profit=tp,
             comment=comment,
+            magic=202632,
         )
         if result["success"]:
             _mark_traded(strategy_id)
@@ -122,7 +123,7 @@ def _close_trades(comment: str, strategy_label: str):
                 "position": pos.ticket,
                 "price": close_price,
                 "deviation": 20,
-                "magic": 30001,
+                "magic": 202632,
                 "comment": f"{comment}-EXIT",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": mt5.ORDER_FILLING_IOC,

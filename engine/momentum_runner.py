@@ -42,19 +42,35 @@ def run_momentum_cycle():
         logger.warning("Insufficient data for Momentum Runner.")
         return
 
-    # 2. Determine H1 Trend
+    # 2. Determine H1 Trend & Momentum Strength
     h1_df['ema50'] = ta.trend.ema_indicator(h1_df['close'], window=50)
-    if h1_df['ema50'].isna().iloc[-1]:
-        logger.warning("Not enough H1 data to compute EMA50.")
+    adx_indicator = ta.trend.ADXIndicator(h1_df['high'], h1_df['low'], h1_df['close'], window=14)
+    h1_df['adx'] = adx_indicator.adx()
+    
+    if h1_df['ema50'].isna().iloc[-1] or h1_df['adx'].isna().iloc[-1]:
+        logger.warning("Not enough H1 data to compute EMA50/ADX.")
         return
 
     h1_close = h1_df['close'].iloc[-1]
     h1_ema50 = h1_df['ema50'].iloc[-1]
+    h1_adx = h1_df['adx'].iloc[-1]
     
+    # Filter: Suppress momentum breakout trading in chop / low-adx consolidation (< 20)
+    if h1_adx < 20.0:
+        logger.info(f"⏭️ [M15 FVG Sniper] H1 ADX is weak ({h1_adx:.1f} < 20.0). Market in chop/ranging box. Skipping momentum runners.")
+        return
+        
     is_bullish_trend = h1_close > h1_ema50
     direction_filter = "long" if is_bullish_trend else "short"
     
-    logger.info(f"H1 Trend is {'BULLISH' if is_bullish_trend else 'BEARISH'} (Close: {h1_close:.2f}, EMA50: {h1_ema50:.2f})")
+    # Distance extension check: Avoid buying top or selling bottom if over-extended from H1 EMA50
+    h1_atr = ta.volatility.average_true_range(h1_df['high'], h1_df['low'], h1_df['close'], window=14).iloc[-1]
+    dist_from_ema = abs(h1_close - h1_ema50)
+    if dist_from_ema > 2.5 * h1_atr:
+        logger.info(f"⏭️ [M15 FVG Sniper] Price over-extended from H1 EMA50 ({dist_from_ema:.2f} > 2.5*ATR {2.5*h1_atr:.2f}). Skipping.")
+        return
+
+    logger.info(f"H1 Trend is {'BULLISH' if is_bullish_trend else 'BEARISH'} (Close: {h1_close:.2f}, EMA50: {h1_ema50:.2f}, ADX: {h1_adx:.1f})")
 
     # 3. Detect M15 Order Blocks
     # Use the last 40 candles of M15 for detection
@@ -116,7 +132,10 @@ def run_momentum_cycle():
                         return
                 mt5_order = mt5.orders_get(ticket=int(t.broker_order_id))
                 if mt5_order and mt5_order[0].magic == MAGIC_NUMBER:
-                    logger.info("♻️ [M15 FVG Sniper] A pending limit order exists. Cancelling the old one to favor the new FVG OB.")
+                    if abs(mt5_order[0].price_open - limit_price) < 0.50:
+                        logger.info(f"⏭️ [M15 FVG Sniper] Identical pending limit order already active in MT5 (#{mt5_order[0].ticket} @ {mt5_order[0].price_open}). Skipping duplicate.")
+                        return
+                    logger.info("♻️ [M15 FVG Sniper] A pending limit order exists at an older OB. Cancelling the old one to favor the new FVG OB.")
                     from engine.broker_executor import cancel_order
                     cancel_order(int(t.broker_order_id))
                     t.status = "CANCELLED"
