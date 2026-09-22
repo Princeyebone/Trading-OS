@@ -85,14 +85,23 @@ def get_silver_m1_indicators():
 def _get_daily_stats():
     """
     Calculates realized profit and consecutive loss count for today for this magic number.
+    Uses broker server time to prevent local PC timezone mismatch.
     Returns (day_pnl, consec_losses, today_deals_count)
     """
     try:
+        from datetime import timedelta
         if not broker_executor._init_mt5():
             return 0.0, 0, 0
-        now = datetime.now()
-        start_of_day = datetime(now.year, now.month, now.day)
-        deals = mt5.history_deals_get(start_of_day, now)
+            
+        tick = mt5.symbol_info_tick(SYMBOL)
+        if tick:
+            b_now = datetime.fromtimestamp(tick.time)
+        else:
+            b_now = datetime.now()
+            
+        start_of_day = datetime(b_now.year, b_now.month, b_now.day)
+        end_of_day = b_now + timedelta(minutes=5)
+        deals = mt5.history_deals_get(start_of_day, end_of_day)
         if not deals:
             return 0.0, 0, 0
 
@@ -124,6 +133,14 @@ def run_silver_scalper_cycle():
     try:
         if not broker_executor._init_mt5():
             return
+
+        from engine.db import get_session
+        from app.models.config import EngineConfig
+        from sqlmodel import select
+        with get_session() as session:
+            config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+            if not config or not config.is_active or not getattr(config, "enable_xag_zero_loss", True):
+                return
 
         now_utc = datetime.now(timezone.utc)
         if not (6 <= now_utc.hour <= 19):

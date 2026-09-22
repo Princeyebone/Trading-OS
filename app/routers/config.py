@@ -31,6 +31,15 @@ class ConfigUpdate(BaseModel):
     news_blackout_minutes: Optional[int] = None
     engine_interval_minutes: Optional[int] = None
     telegram_enabled: Optional[bool] = None
+    enable_xau_zero_loss: Optional[bool] = None
+    enable_xag_zero_loss: Optional[bool] = None
+    enable_eurusd_i6: Optional[bool] = None
+    enable_eurusd_i7: Optional[bool] = None
+    enable_xau_i1: Optional[bool] = None
+    enable_xau_i4: Optional[bool] = None
+    enable_xau_i5: Optional[bool] = None
+    enable_gi2_pullback: Optional[bool] = None
+    enable_xagi1_core: Optional[bool] = None
     ai_provider: Optional[str] = None
 
 

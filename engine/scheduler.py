@@ -669,7 +669,7 @@ def run_scalping_cycle():
             logger.warning("No EngineConfig found. Scalping skipped.")
             return
             
-        if not config.is_active:
+        if not config or not config.is_active or not getattr(config, "enable_xau_i1", True):
             return
             
         executed = _scalping_integration.check_and_execute(config)
@@ -704,7 +704,7 @@ def run_m1_scalping_cycle():
     session = get_session()
     try:
         config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
-        if not config or not config.is_active:
+        if not config or not config.is_active or not getattr(config, "enable_xau_i1", True):
             return
             
         executed = _scalping_integration.check_and_execute_m1(config)
@@ -743,7 +743,7 @@ def run_xagi4_scalping_cycle():
     session = get_session()
     try:
         config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
-        if not config or not config.is_active:
+        if not config or not config.is_active or not getattr(config, "enable_xau_i4", True):
             return
             
         executed = _xagi4_integration.check_and_execute(config)
@@ -780,7 +780,7 @@ def run_xagi4_m1_scalping_cycle():
     session = get_session()
     try:
         config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
-        if not config or not config.is_active:
+        if not config or not config.is_active or not getattr(config, "enable_xau_i4", True):
             return
             
         executed = _xagi4_integration.check_and_execute_m1(config)
@@ -817,7 +817,7 @@ def run_xagi5_scalping_cycle():
     session = get_session()
     try:
         config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
-        if not config or not config.is_active:
+        if not config or not config.is_active or not getattr(config, "enable_xau_i5", True):
             return
             
         executed = _xagi5_integration.check_and_execute(config)
@@ -852,7 +852,7 @@ def run_xagi5_m1_scalping_cycle():
     session = get_session()
     try:
         config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
-        if not config or not config.is_active:
+        if not config or not config.is_active or not getattr(config, "enable_xau_i5", True):
             return
             
         executed = _xagi5_integration.check_and_execute_m1(config)
@@ -1085,7 +1085,7 @@ def run_eusdi6_scalping_cycle():
     session = get_session()
     try:
         config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
-        if not config or not config.is_active:
+        if not config or not config.is_active or not getattr(config, "enable_eurusd_i6", True):
             return
             
         executed = _eusdi6_integration.check_and_execute(config)
@@ -1120,7 +1120,7 @@ def run_xau_hyper_scalping_cycle():
     session = get_session()
     try:
         config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
-        if not config or not config.is_active:
+        if not config or not config.is_active or not getattr(config, "enable_xau_zero_loss", True):
             return
             
         executed = _xau_hyper_integration.check_and_execute(config)
@@ -1156,7 +1156,7 @@ def run_eusdi7_scalping_cycle():
     session = get_session()
     try:
         config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
-        if not config or not config.is_active:
+        if not config or not config.is_active or not getattr(config, "enable_eurusd_i7", True):
             return
             
         _eusdi7_integration.check_and_execute(config)

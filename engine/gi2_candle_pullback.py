@@ -84,6 +84,14 @@ def run_gi2_candle_pullback_cycle():
     """
     logger.info("[GI2-PULLBACK] Cycle starting...")
 
+    from engine.db import get_session
+    from app.models.config import EngineConfig
+    from sqlmodel import select
+    with get_session() as session:
+        config = session.exec(select(EngineConfig).order_by(EngineConfig.id.desc())).first()
+        if not config or not config.is_active or not getattr(config, "enable_gi2_pullback", True):
+            return
+
     # Avoid stacking positions
     if _is_already_in_trade():
         logger.info("[GI2-PULLBACK] Already in trade — skipping.")

@@ -25,7 +25,7 @@ from engine.db import get_session
 
 logger = logging.getLogger("engine.xau_hyper_scalper")
 
-MAGIC_NUMBER = 203200
+MAGIC_NUMBER = 203201
 SYMBOL = "XAUUSD"
 
 # Risk parameters tailored for Gold
@@ -41,16 +41,31 @@ class XauHyperScalper:
     def _get_daily_stats(self):
         """
         Calculates realized profit and consecutive loss count for today for XAU-i6.
+        Uses broker server time to prevent local PC timezone mismatch.
         Returns (day_pnl, consec_losses, today_deals_count)
         """
         try:
-            now = datetime.now()
-            start_of_day = datetime(now.year, now.month, now.day)
-            deals = mt5.history_deals_get(start_of_day, now)
+            from datetime import timedelta
+            tick = mt5.symbol_info_tick(SYMBOL)
+            if tick:
+                b_now = datetime.fromtimestamp(tick.time)
+            else:
+                b_now = datetime.now()
+                
+            start_of_day = datetime(b_now.year, b_now.month, b_now.day)
+            end_of_day = b_now + timedelta(minutes=5)
+            deals = mt5.history_deals_get(start_of_day, end_of_day)
             if not deals:
                 return 0.0, 0, 0
 
-            magic_deals = [d for d in deals if d.magic == MAGIC_NUMBER and d.entry == mt5.DEAL_ENTRY_OUT]
+            # Filter for deals from this strategy (including both 203201 and 203200 zero-loss deals)
+            magic_deals = [
+                d for d in deals 
+                if d.entry == mt5.DEAL_ENTRY_OUT and (
+                    d.magic == 203201 or 
+                    (d.magic == 203200 and ("zero-loss" in (d.comment or "") or d.position_id in (58557335342, 58557635792)))
+                )
+            ]
             if not magic_deals:
                 return 0.0, 0, 0
 

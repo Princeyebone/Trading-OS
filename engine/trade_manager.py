@@ -109,7 +109,7 @@ def manage_open_trades():
                 202604: "XAGI4",  202700: "XAGI3",  202702: "XAGI2",
                 202800: "XAGI5",  202804: "XAU-i4", 202900: "XAGI6",
                 203000: "EURUSD-i6", 203100: "EURUSD-i7",
-                203200: "XAU-i6",    203300: "GI3",
+                203200: "XAU-i6",    203201: "XAU-i6", 203300: "GI3",
             }
             sig = session.get(Signal, trade.signal_id) if trade.signal_id else None
             sys_num = sig.session if (sig and sig.session) else None
@@ -192,12 +192,12 @@ def manage_open_trades():
             
             # Skip dynamic ratcheting/trailing TP for Macro Swing & Pure TP/SL Scalpers (EUSDI6, XAUI6, and XAGI2)
             # These systems rely strictly on their native broker Take-Profit orders at the mean
-            if mt5_pos[0].magic in [202601, 203000, 203200, 202702]:
-                strat_label = {203000: "EURUSD-i6 (Mean Reversion)", 203200: "XAUUSD-i6 (Zero-Loss Scalper)", 202702: "XAGUSD-i2 (Zero-Loss Scalper)", 202601: "Macro Swing"}.get(mt5_pos[0].magic, f"Magic#{mt5_pos[0].magic}")
+            if mt5_pos[0].magic in [202601, 203000, 203200, 203201, 202702]:
+                strat_label = {203000: "EURUSD-i6 (Mean Reversion)", 203200: "XAUUSD-i6 (Zero-Loss Scalper)", 203201: "XAUUSD-i6 (Zero-Loss Scalper)", 202702: "XAGUSD-i2 (Zero-Loss Scalper)", 202601: "Macro Swing"}.get(mt5_pos[0].magic, f"Magic#{mt5_pos[0].magic}")
                 profit_val = mt5_pos[0].profit
                 
                 # Zero-Loss Protection: If profit surpasses +$15.00, automatically lock SL to Entry + buffer to guarantee a green outcome
-                if mt5_pos[0].magic in [203200, 202702] and profit_val >= 15.0:
+                if mt5_pos[0].magic in [203200, 203201, 202702] and profit_val >= 15.0:
                     entry_p = mt5_pos[0].price_open
                     cur_sl = mt5_pos[0].sl
                     is_buy = (mt5_pos[0].type == mt5.POSITION_TYPE_BUY)

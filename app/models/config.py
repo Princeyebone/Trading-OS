@@ -44,6 +44,17 @@ class EngineConfig(SQLModel, table=True):
     # Notifications
     telegram_enabled: bool = Field(default=True)
 
+    # Strategy Activation Toggles (Default: True/On)
+    enable_xau_zero_loss: bool = Field(default=True)   # Gold Zero-Loss Scalper (XAU-i6)
+    enable_xag_zero_loss: bool = Field(default=True)   # Silver Zero-Loss Scalper (XAG-i2)
+    enable_eurusd_i6: bool = Field(default=True)       # EURUSD Mean Reversion (EUSDI6)
+    enable_eurusd_i7: bool = Field(default=True)       # EURUSD Momentum Scalper (EUSDI7)
+    enable_xau_i1: bool = Field(default=True)          # Gold Core Scalper (XAU-i1)
+    enable_xau_i4: bool = Field(default=True)          # Gold Trend Scalper (XAU-i4)
+    enable_xau_i5: bool = Field(default=True)          # Gold Volume Scalper (XAU-i5)
+    enable_gi2_pullback: bool = Field(default=True)    # Gold 2-Candle Pullback (GI2)
+    enable_xagi1_core: bool = Field(default=True)      # Silver Trend Scalper (XAGI1)
+
     # AI
     ai_provider: str = Field(default="claude", max_length=20)
 
